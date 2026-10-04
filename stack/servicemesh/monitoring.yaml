@@ -1,0 +1,15 @@
+# Control plane metrics for OpenShift user workload monitoring (Kiali reads them via Thanos)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: istiod-monitor
+  namespace: istio-system
+spec:
+  targetLabels:
+    - app
+  selector:
+    matchLabels:
+      istio: pilot
+  endpoints:
+    - port: http-monitoring
+      interval: 30s

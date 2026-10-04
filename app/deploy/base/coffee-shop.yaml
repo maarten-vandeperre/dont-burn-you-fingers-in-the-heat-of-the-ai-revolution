@@ -1,0 +1,99 @@
+# The coffee shop (from owning-the-inference-layer, extended): UI + order flow, orders in PostgreSQL.
+apiVersion: v1
+kind: Service
+metadata:
+  name: coffee-shop
+  labels:
+    app: coffee-shop
+    backstage.io/kubernetes-id: coffee-shop
+    app.kubernetes.io/part-of: ai-demo
+spec:
+  selector:
+    app: coffee-shop
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coffee-shop
+  labels:
+    app: coffee-shop
+    version: v1
+    app.kubernetes.io/part-of: ai-demo
+    backstage.io/kubernetes-id: coffee-shop
+    app.openshift.io/runtime: quarkus
+  annotations:
+    app.openshift.io/connects-to: '[{"apiVersion":"apps/v1","kind":"Deployment","name":"coffee-menu-v1"},{"apiVersion":"apps/v1","kind":"Deployment","name":"coffee-menu-v2"},{"apiVersion":"apps/v1","kind":"Deployment","name":"model-router"},{"apiVersion":"apps/v1","kind":"Deployment","name":"projection-service"}]'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coffee-shop
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: coffee-shop
+        version: v1
+        backstage.io/kubernetes-id: coffee-shop
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '8080'
+        prometheus.io/path: /q/metrics
+        proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+    spec:
+      serviceAccountName: coffee-shop
+      containers:
+      - name: app
+        image: coffee-shop:latest
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: OTEL_ENDPOINT
+          value: http://otel-collector.tracing-system.svc.cluster.local:4317
+        - name: ROUTER_URL
+          value: http://model-router:8080/v1
+        - name: COFFEE_MODEL
+          value: qwen
+        - name: MENU_URL
+          value: http://coffee-menu:8080
+        - name: PROJECTION_URL
+          value: http://projection-service:8080
+        - name: DB_URL
+          value: jdbc:postgresql://inventory-db.kafka.svc.cluster.local:5432/inventory
+        - name: DB_USER
+          value: postgres
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: inventory-db
+              key: admin-password
+        - name: MLFLOW_UI_URL
+          valueFrom:
+            configMapKeyRef:
+              name: ai-demo-config
+              key: MLFLOW_UI_URL
+              optional: true
+        readinessProbe:
+          httpGet:
+            path: /q/health/ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /q/health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 768Mi

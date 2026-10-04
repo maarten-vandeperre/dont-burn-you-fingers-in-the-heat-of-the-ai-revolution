@@ -1,0 +1,9 @@
+# Every workload in ai-demo only accepts mutual TLS. A pod outside the mesh (no sidecar, no
+# certificate) cannot talk to these services at all: try `app/demo.sh mtls`.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+spec:
+  mtls:
+    mode: STRICT

@@ -1,0 +1,104 @@
+# Ingress gateway for ai-demo (gateway injection: the mesh fills in the Envoy container).
+# OpenShift Route (edge TLS) -> ai-demo-gateway -> frontend, all inside the mesh with mTLS.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-demo-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      istio: ai-demo-gateway
+  template:
+    metadata:
+      annotations:
+        inject.istio.io/templates: gateway
+      labels:
+        istio: ai-demo-gateway
+        app: ai-demo-gateway
+        sidecar.istio.io/inject: "true"
+    spec:
+      serviceAccountName: ai-demo-gateway
+      containers:
+        - name: istio-proxy
+          image: auto
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-demo-gateway
+spec:
+  selector:
+    istio: ai-demo-gateway
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: ai-demo-gateway
+spec:
+  selector:
+    istio: ai-demo-gateway
+  servers:
+    - port:
+        number: 8080
+        name: http
+        protocol: HTTP
+      hosts: ["*"]
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: frontend
+spec:
+  hosts: ["*"]
+  gateways: [ai-demo-gateway]
+  http:
+    # coffee-ai-demo.<apps-domain> (Route "coffee") -> coffee-shop, everything else -> frontend
+    - match:
+        - authority:
+            prefix: coffee-ai-demo.
+      route:
+        - destination:
+            host: coffee-shop
+            port:
+              number: 8080
+    - route:
+        - destination:
+            host: frontend
+            port:
+              number: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ai-demo
+spec:
+  to:
+    kind: Service
+    name: ai-demo-gateway
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: coffee
+spec:
+  to:
+    kind: Service
+    name: ai-demo-gateway
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

@@ -1,0 +1,14 @@
+# Canary: 80% v1, 20% v2 (mocha + seasonal drink, new prices).   ./deploy.sh app menu canary [weight]
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: coffee-menu
+  namespace: ai-demo
+spec:
+  hosts: [coffee-menu]
+  http:
+    - route:
+        - destination: {host: coffee-menu, subset: v1}
+          weight: 80
+        - destination: {host: coffee-menu, subset: v2}
+          weight: 20

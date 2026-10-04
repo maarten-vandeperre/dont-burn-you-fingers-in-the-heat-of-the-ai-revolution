@@ -1,0 +1,29 @@
+# TLS ends at the OpenShift router (route.yaml); Keycloak serves HTTP inside the cluster and
+# trusts the router's X-Forwarded-* headers. The master realm admin comes from the
+# keycloak-sso-bootstrap-admin Secret (username / password, created by deploy.sh).
+apiVersion: k8s.keycloak.org/v2alpha1
+kind: Keycloak
+metadata:
+  name: platform-sso
+spec:
+  instances: 1
+  db:
+    vendor: postgres
+    host: platform-sso-db
+    database: keycloak
+    usernameSecret: {name: keycloak-sso-db, key: username}
+    passwordSecret: {name: keycloak-sso-db, key: password}
+  http:
+    httpEnabled: true
+  hostname:
+    hostname: REPLACED-BY-KUSTOMIZE
+  proxy:
+    headers: xforwarded
+  ingress:
+    enabled: false
+  bootstrapAdmin:
+    user:
+      secret: keycloak-sso-bootstrap-admin
+  resources:
+    requests: {cpu: 250m, memory: 1Gi}
+    limits: {cpu: "2", memory: 2Gi}

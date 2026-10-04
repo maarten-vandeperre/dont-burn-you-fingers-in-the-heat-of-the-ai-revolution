@@ -1,0 +1,6 @@
+build/
+.gradle/
+src/main/webui/node_modules/
+src/main/resources/META-INF/resources/
+.idea/
+.vscode/

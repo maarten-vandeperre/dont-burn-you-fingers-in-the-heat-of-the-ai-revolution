@@ -1,0 +1,10 @@
+Platform release notes, week 40
+
+The models-as-a-service gateway now enforces token quotas per subscription: the free tier allows
+5,000 tokens per minute, the premium tier 100,000. Requests over the limit receive HTTP 429.
+The coffee shop application moved its menu service behind the service mesh. Version 2 of the menu
+adds a mocha and a seasonal pumpkin spice latte and is currently receiving 20 percent of traffic.
+Debezium now captures the coffee order tables, and the audit trail in MongoDB is complete for all
+orders placed since Monday. Known issue: the first request to a cold CPU model can take up to a
+minute; the model router falls back to OpenAI after 60 seconds for the alias auto.
+Next week: GPU nodes for the model servers and a second Qwen replica.

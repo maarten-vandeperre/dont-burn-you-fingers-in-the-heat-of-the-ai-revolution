@@ -1,0 +1,52 @@
+# NeMo Guardrails configuration "coffee": the same files run locally (podman compose, mounted at
+# /app/config/coffee) and on OpenShift AI (TrustyAI NemoGuardrails CR, ConfigMap).
+# The model endpoint and key come from the environment, exactly as on OpenShift AI:
+#   MAIN_MODEL_BASE_URL  OpenAI (https://api.openai.com/v1) or the Qwen service of Podman AI Lab
+#   OPENAI_API_KEY       the key (any value for AI Lab), via api_key_env_var below
+# The model name comes with every request ("model" field, set by the coffee app).
+models:
+  - type: main
+    engine: openai
+    model: coffee-model          # replaced by the "model" of each request
+    # Read the key from OPENAI_API_KEY. Required for the TrustyAI server: without it, it expects
+    # the key per request in an X-Authorization header and sends "runtime-provided" otherwise.
+    api_key_env_var: OPENAI_API_KEY
+    parameters:
+      max_tokens: 80             # about 200 characters; the output rail enforces the hard limit
+      temperature: 0.2
+
+# The app sends its own system prompt; guardrails only add the rails around the model call.
+passthrough: true
+
+rails:
+  config:
+    # TrustyAI / NeMo built-in regex rail: cheap, no LLM, runs first
+    regex_detection:
+      input:
+        case_insensitive: true
+        patterns:
+          - "ignore (all |any )?(previous|prior|above) (instructions|prompts|rules)"
+          - "(reveal|show|print|repeat) (me )?(your |the )?(system|hidden|initial) (prompt|instructions)"
+          - "you are now (a |an )?"
+          - "\\bjailbreak(ed)?\\b"
+          - "developer mode"
+    # Presidio: personal data never reaches the model, it is replaced by [MASKED]
+    sensitive_data_detection:
+      input:
+        entities:
+          - EMAIL_ADDRESS
+          - PHONE_NUMBER
+          - CREDIT_CARD
+
+  input:
+    flows:
+      - regex check input             # prompt injection patterns (TrustyAI built-in)
+      - check input length            # max 200 characters (actions.py)
+      - mask sensitive data on input  # Presidio PII masking
+      - check cappuccino time         # no cappuccino after noon (actions.py)
+      - self check input              # coffee only (LLM as judge, prompts.yml)
+
+  output:
+    flows:
+      - check cappuccino output       # the model may not suggest one either
+      - limit output length           # max 200 characters (actions.py)

@@ -1,0 +1,38 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: scale-maas-model
+  title: "Models-as-a-Service: scale a model"
+  description: Set the replicas of a vLLM model server. 0 stops Qwen, which makes the model-router fall back to OpenAI for alias "auto".
+  tags: [openshift-ai, maas, vllm]
+spec:
+  owner: platform-team
+  type: platform-action
+  parameters:
+    - title: Model
+      required: [model, replicas]
+      properties:
+        model:
+          title: Model
+          type: string
+          enum: [qwen3-0-6b, gemma-3-270m-it]
+        replicas:
+          title: Replicas
+          type: integer
+          default: 1
+          minimum: 0
+          maximum: 3
+  steps:
+    - id: scale
+      name: Scale
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/serving.kserve.io/v1alpha1/namespaces/maas-models/llminferenceservices/${{ parameters.model }}
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"replicas":${{ parameters.replicas }}}}'
+  output:
+    links:
+      - title: Model in the catalog
+        entityRef: resource:default/${{ parameters.model }}

@@ -1,0 +1,8 @@
+# RHOAI 3.4: metrics based MaaS observability dashboard (Tech Preview)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../operators
+  - ../../monitoring
+  # data for the OpenShift AI observability dashboard (COO 1.5 workarounds)
+  - ../../dashboard-datasource

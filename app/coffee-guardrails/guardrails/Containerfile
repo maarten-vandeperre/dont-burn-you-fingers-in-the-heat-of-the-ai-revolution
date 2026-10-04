@@ -1,0 +1,7 @@
+# Upstream NeMo Guardrails server (fallback for the TrustyAI image), with Presidio for PII masking.
+FROM registry.access.redhat.com/ubi9/python-312
+RUN pip install --no-cache-dir "nemoguardrails[server,sdd]==0.24.1" \
+ && python -m spacy download en_core_web_lg
+EXPOSE 8000
+# same layout as the TrustyAI image: configurations in /app/config/<name>, default in CONFIG_ID
+CMD ["sh", "-c", "nemoguardrails server --config /app/config --port 8000 --default-config-id ${CONFIG_ID:-coffee} --disable-chat-ui"]

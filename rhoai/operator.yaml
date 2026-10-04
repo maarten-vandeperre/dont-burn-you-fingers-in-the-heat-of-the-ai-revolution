@@ -1,0 +1,28 @@
+# OpenShift AI operator. __CHANNEL__ is filled in by "./deploy.sh switch-rhoai --to <version>":
+#   stable-3.4 -> stays on the latest 3.4.z   |   stable-3.x -> latest 3.x (3.5 today)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: redhat-ods-operator
+  annotations:
+    openshift.io/display-name: "Red Hat OpenShift AI"
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: redhat-ods-operator
+  namespace: redhat-ods-operator
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: rhods-operator
+  namespace: redhat-ods-operator
+spec:
+  channel: __CHANNEL__
+  installPlanApproval: Automatic
+  name: rhods-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace

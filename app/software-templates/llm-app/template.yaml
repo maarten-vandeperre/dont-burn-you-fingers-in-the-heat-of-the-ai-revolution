@@ -1,0 +1,120 @@
+# Developer Hub software template: a small application that answers questions with a model managed
+# by the platform. The form never shows model names: the platform maps
+#   use case  -> model and system prompt     (values.modelId below, UseCase.java in the skeleton)
+#   t-shirt   -> max input text and answer length
+# __GITLAB_HOST__ / __APPS_DOMAIN__ are filled in by ./deploy.sh gitlab when this repo is pushed.
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: llm-app
+  title: LLM application (Quarkus, LangChain4j, React)
+  description: >-
+    A small question answering application on the platform's models. You pick the use case and
+    the size; the platform picks and runs the model. Generates the code, a GitLab repository,
+    OpenShift manifests and the catalog entry.
+  tags: [recommended, quarkus, langchain4j, react, ai]
+  links:
+    - url: https://__GITLAB_HOST__/ai-platform/platform/-/tree/main/app/software-templates/llm-app
+      title: Template source
+spec:
+  owner: group:default/platform-team
+  type: service
+
+  parameters:
+    - title: Metadata
+      required: [name, description, packageName]
+      properties:
+        name:
+          title: Name
+          type: string
+          description: Used for the repository, the OpenShift project and the catalog entry
+          pattern: '^[a-z]([-a-z0-9]{0,30}[a-z0-9])?$'
+          ui:autofocus: true
+          ui:help: "Lower case letters, digits and dashes, e.g. recipe-helper"
+        description:
+          title: Description
+          type: string
+          maxLength: 200
+          ui:help: One sentence about what the application is for
+        packageName:
+          title: Package name
+          type: string
+          default: org.acme.llm
+          pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'
+          ui:help: "Java package of the generated code, e.g. com.example.recipes"
+
+    - title: Model selection
+      required: [useCase, size]
+      properties:
+        useCase:
+          title: Use case
+          type: string
+          default: OVERALL_KNOWLEDGE
+          enum: [OVERALL_KNOWLEDGE, CODING_QUESTIONS, MEDICAL_QUESTIONS, FOOD_QUESTIONS]
+          enumNames: [OVERALL KNOWLEDGE, CODING QUESTIONS, MEDICAL QUESTIONS, FOOD QUESTIONS]
+          ui:help: The platform selects and operates the model that fits this use case.
+        size:
+          title: T-shirt size
+          type: string
+          default: SMALL
+          enum: [SMALL, MEDIUM, LARGE]
+          enumNames:
+            - SMALL (max 200 characters text)
+            - MEDIUM (max 1000 characters text)
+            - LARGE (max 5000 characters text)
+
+  steps:
+    - id: fetch
+      name: Generate the project
+      action: fetch:template
+      input:
+        url: ./skeleton
+        copyWithoutTemplating:
+          - gradlew
+          - gradlew.bat
+          - gradle/wrapper/*
+        values:
+          name: ${{ parameters.name }}
+          description: ${{ parameters.description }}
+          packageName: ${{ parameters.packageName }}
+          packagePath: ${{ parameters.packageName | replace(".", "/") }}
+          useCase: ${{ parameters.useCase }}
+          size: ${{ parameters.size }}
+          # platform policy (not shown in the form)
+          modelId: ${{ "gemma-3-270m-it" if parameters.useCase == "FOOD_QUESTIONS" else "qwen3-0-6b" }}
+          maxChars: ${{ 200 if parameters.size == "SMALL" else (1000 if parameters.size == "MEDIUM" else 5000) }}
+          maxTokens: ${{ 256 if parameters.size == "SMALL" else (512 if parameters.size == "MEDIUM" else 1024) }}
+          gitlabHost: __GITLAB_HOST__
+          appsDomain: __APPS_DOMAIN__
+
+    - id: publish
+      name: Create the GitLab repository
+      action: publish:gitlab
+      input:
+        repoUrl: __GITLAB_HOST__?owner=ai-platform&repo=${{ parameters.name }}
+        description: ${{ parameters.description }}
+        defaultBranch: main
+        repoVisibility: public
+
+    - id: register
+      name: Register in the catalog
+      action: catalog:register
+      input:
+        repoContentsUrl: ${{ steps.publish.output.repoContentsUrl }}
+        catalogInfoPath: /catalog-info.yaml
+
+  output:
+    links:
+      - title: Repository
+        url: ${{ steps.publish.output.remoteUrl }}
+      - title: Open in the catalog
+        icon: catalog
+        entityRef: ${{ steps.register.output.entityRef }}
+    text:
+      - title: Next steps
+        content: |
+          Build and deploy on OpenShift (see the README in the repository):
+
+              oc apply -k deploy/
+              oc create secret generic llm-credentials -n ${{ parameters.name }} --from-literal=LLM_API_KEY=<your MaaS API key>
+              oc start-build ${{ parameters.name }} -n ${{ parameters.name }} --follow

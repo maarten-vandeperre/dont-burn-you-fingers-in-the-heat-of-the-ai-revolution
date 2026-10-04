@@ -1,0 +1,25 @@
+# GitLab CE (Omnibus container) for the demo: hosts the platform repository, which Developer Hub
+# links to ("View source"), Argo CD can sync from and Tekton can build from.
+# Login: root / DEMO_ADMIN_PASSWORD, or "Keycloak" (single sign-on with the demo user).
+# Note: "admin" is a reserved name in GitLab, so the SSO user appears there as "admin1".
+# Secrets (root password, OIDC client secret) are created by deploy.sh.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: gitlab
+commonAnnotations:
+  argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - gitlab.yaml
+configMapGenerator:
+  - name: gitlab-cluster-params
+    envs:
+      - cluster-params.env
+    options:
+      disableNameSuffixHash: true
+replacements:
+  - source: {kind: ConfigMap, name: gitlab-cluster-params, fieldPath: data.GITLAB_HOST}
+    targets:
+      - select: {kind: Route, name: gitlab}
+        fieldPaths: [spec.host]

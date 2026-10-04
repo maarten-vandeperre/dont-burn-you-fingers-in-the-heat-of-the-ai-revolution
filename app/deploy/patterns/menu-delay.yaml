@@ -1,0 +1,17 @@
+# Chaos: 3 s delay on 50% of the calls. The shop times out after 1.5 s and uses its cached menu.
+#   ./deploy.sh app menu delay [percent]
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: coffee-menu
+  namespace: ai-demo
+spec:
+  hosts: [coffee-menu]
+  http:
+    - fault:
+        delay:
+          fixedDelay: 3s
+          percentage:
+            value: 50.0
+      route:
+        - destination: {host: coffee-menu, subset: v1}

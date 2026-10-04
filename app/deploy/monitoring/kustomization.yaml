@@ -1,0 +1,7 @@
+# Alerts (user workload monitoring) + a dashboard in the OpenShift console
+# (Observe > Dashboards > "AI demo: models, RAG, CDC and mesh").
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - prometheus-rules.yaml
+  - console-dashboard.yaml

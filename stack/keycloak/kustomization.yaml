@@ -1,0 +1,48 @@
+# Single sign-on for the demo: Red Hat build of Keycloak, realm "demo", one user for everything
+# (DEMO_ADMIN_USER / DEMO_ADMIN_PASSWORD, default admin / redhatdemo) and OIDC clients for
+# Developer Hub and GitLab. Named "platform-sso" so it never collides with an existing Keycloak.
+# Secrets (DB, bootstrap admin, demo user, client secrets) are created by deploy.sh.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: keycloak
+commonAnnotations:
+  argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+resources:
+  - namespace.yaml
+  - database.yaml
+  - keycloak.yaml
+  - route.yaml
+  - realm-demo.yaml
+configMapGenerator:
+  - name: sso-cluster-params
+    envs:
+      - cluster-params.env
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+replacements:
+  - source: {kind: ConfigMap, name: sso-cluster-params, fieldPath: data.KEYCLOAK_URL}
+    targets:
+      - select: {kind: Keycloak, name: platform-sso}
+        fieldPaths: [spec.hostname.hostname]
+  - source: {kind: ConfigMap, name: sso-cluster-params, fieldPath: data.KEYCLOAK_HOST}
+    targets:
+      - select: {kind: Route, name: platform-sso}
+        fieldPaths: [spec.host]
+  - source: {kind: ConfigMap, name: sso-cluster-params, fieldPath: data.RHDH_REDIRECT_URI}
+    targets:
+      - select: {kind: KeycloakRealmImport, name: demo-realm}
+        fieldPaths: ["spec.realm.clients.[clientId=developer-hub].redirectUris.0"]
+  - source: {kind: ConfigMap, name: sso-cluster-params, fieldPath: data.RHDH_URL}
+    targets:
+      - select: {kind: KeycloakRealmImport, name: demo-realm}
+        fieldPaths: ["spec.realm.clients.[clientId=developer-hub].rootUrl"]
+  - source: {kind: ConfigMap, name: sso-cluster-params, fieldPath: data.GITLAB_REDIRECT_URI}
+    targets:
+      - select: {kind: KeycloakRealmImport, name: demo-realm}
+        fieldPaths: ["spec.realm.clients.[clientId=gitlab].redirectUris.0"]
+  - source: {kind: ConfigMap, name: sso-cluster-params, fieldPath: data.GITLAB_URL}
+    targets:
+      - select: {kind: KeycloakRealmImport, name: demo-realm}
+        fieldPaths: ["spec.realm.clients.[clientId=gitlab].rootUrl"]

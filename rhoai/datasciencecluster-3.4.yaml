@@ -1,0 +1,23 @@
+# Lean DataScienceCluster for OpenShift AI 3.4: only what MaaS, the Gen AI studio playground
+# and the dashboard need. Created only when no default-dsc exists yet; add other components later.
+apiVersion: datasciencecluster.opendatahub.io/v2
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+spec:
+  components:
+    dashboard:
+      managementState: Managed
+    workbenches:
+      managementState: Managed
+      workbenchNamespace: rhods-notebooks
+    kserve:
+      managementState: Managed
+      rawDeploymentServiceConfig: Headed
+      modelsAsService:
+        managementState: Managed
+    # Gen AI studio playground backend on 3.4 (a regular component, no OGX module involved)
+    llamastackoperator:
+      managementState: Managed
+    mlflowoperator:
+      managementState: Managed

@@ -1,0 +1,9 @@
+# vLLM CPU + OpenTelemetry tracing (needs stack/tracing)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - ../../gemma-3-270m-it
+  - ../../qwen3-0-6b
+components:
+  - ../../components/tracing

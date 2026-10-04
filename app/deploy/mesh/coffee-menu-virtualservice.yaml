@@ -1,0 +1,11 @@
+# Default route for coffee-menu: v1, no faults. ./deploy.sh app menu <scenario> replaces it.
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: coffee-menu
+  namespace: ai-demo
+spec:
+  hosts: [coffee-menu]
+  http:
+    - route:
+        - destination: {host: coffee-menu, subset: v1}

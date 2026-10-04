@@ -1,0 +1,162 @@
+# Binary Docker builds: demo.sh build uploads the app/ folder and builds in the cluster.
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: rag-service
+  labels:
+    app: rag-service
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+      buildArgs:
+        - name: SERVICE
+          value: rag-service
+  output:
+    to:
+      kind: ImageStreamTag
+      name: rag-service:latest
+  resources:
+    limits:
+      memory: 3Gi
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: model-router
+  labels:
+    app: model-router
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+      buildArgs:
+        - name: SERVICE
+          value: model-router
+  output:
+    to:
+      kind: ImageStreamTag
+      name: model-router:latest
+  resources:
+    limits:
+      memory: 3Gi
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: orders-service
+  labels:
+    app: orders-service
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+      buildArgs:
+        - name: SERVICE
+          value: orders-service
+  output:
+    to:
+      kind: ImageStreamTag
+      name: orders-service:latest
+  resources:
+    limits:
+      memory: 3Gi
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: projection-service
+  labels:
+    app: projection-service
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+      buildArgs:
+        - name: SERVICE
+          value: projection-service
+  output:
+    to:
+      kind: ImageStreamTag
+      name: projection-service:latest
+  resources:
+    limits:
+      memory: 3Gi
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: frontend
+  labels:
+    app: frontend
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: frontend/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: frontend:latest
+  resources:
+    limits:
+      memory: 3Gi
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: coffee-menu
+  labels:
+    app: coffee-menu
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+      buildArgs:
+        - name: SERVICE
+          value: coffee-menu
+  output:
+    to:
+      kind: ImageStreamTag
+      name: coffee-menu:latest
+  resources:
+    limits:
+      memory: 3Gi
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: coffee-shop
+  labels:
+    app: coffee-shop
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: coffee-shop/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: coffee-shop:latest
+  resources:
+    limits:
+      memory: 3Gi

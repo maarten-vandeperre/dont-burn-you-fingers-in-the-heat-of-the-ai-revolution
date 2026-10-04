@@ -1,0 +1,45 @@
+# Argo CD Application for the demo apps (created by: app/demo.sh gitops <git-url> [revision]).
+# Developer Hub shows its sync status on every ai-demo component (annotation argocd/app-name).
+# Runtime changes made from Developer Hub templates or demo.sh are ignored on purpose:
+# traffic pattern (VirtualService rag-service), replicas, and the Argo Rollout revision.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ai-demo
+  namespace: openshift-gitops
+  labels:
+    app.kubernetes.io/part-of: ai-platform
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: __REPO_URL__
+    targetRevision: __REVISION__
+    path: __PATH__
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - RespectIgnoreDifferences=true
+      - SkipDryRunOnMissingResource=true
+  ignoreDifferences:
+    - group: networking.istio.io
+      kind: VirtualService
+      name: rag-service
+      jsonPointers: [/spec/http]
+    - group: networking.istio.io
+      kind: VirtualService
+      name: model-router
+      jsonPointers: [/spec/http]
+    - group: apps
+      kind: Deployment
+      jsonPointers: [/spec/replicas]
+    - group: argoproj.io
+      kind: Rollout
+      jsonPointers: [/spec/template/metadata/annotations]
+    - kind: ServiceAccount
+      jqPathExpressions: [.imagePullSecrets, '.secrets[] | select(.name | test("dockercfg"))']

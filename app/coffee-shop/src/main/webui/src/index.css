@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Red Hat Text", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --color-brand: #7c4a2d;
+}

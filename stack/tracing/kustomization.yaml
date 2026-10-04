@@ -1,0 +1,12 @@
+# Shared tracing backend for the service mesh and the vLLM model servers:
+#   apps / Envoy sidecars / vLLM --OTLP--> otel-collector --OTLP--> Tempo (platform)
+# Viewable in: OpenShift console > Observe > Traces, the Tempo Jaeger UI route, and Kiali.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+commonAnnotations:
+  argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+resources:
+  - namespace.yaml
+  - tempo.yaml
+  - otel-collector.yaml
+  - console-plugin.yaml

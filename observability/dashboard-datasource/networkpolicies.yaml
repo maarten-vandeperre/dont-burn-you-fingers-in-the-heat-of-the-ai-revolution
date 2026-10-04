@@ -1,0 +1,64 @@
+# WORKAROUND (COO 1.5): the generated ingress policy omits gRPC 10901, so Thanos Querier cannot
+# reach the Prometheus sidecar (Thanos returns no metrics).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thanos-querier-to-sidecar
+  namespace: redhat-ods-monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: data-science-monitoringstack
+      app.kubernetes.io/name: prometheus
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: observability-operator
+              app.kubernetes.io/part-of: ThanosQuerier
+      ports:
+        - port: 10901
+          protocol: TCP
+  policyTypes: [Ingress]
+---
+# WORKAROUND (COO 1.5): perses-operator-access points at the wrong namespace; the Perses operator
+# runs in openshift-operators and could not sync dashboards / datasources.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: perses-operator-access-fix
+  namespace: redhat-ods-monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: perses-operator
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-operators
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: perses-operator
+      ports:
+        - port: 8080
+          protocol: TCP
+  policyTypes: [Ingress]
+---
+# Lets the perses-auth-fix job (same namespace) reach the Perses API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: perses-intra-namespace-access
+  namespace: redhat-ods-monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: perses
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 8080
+          protocol: TCP
+  policyTypes: [Ingress]

@@ -1,0 +1,29 @@
+# vLLM server spans (request queueing, prefill/decode timing, token counts) to the shared
+# collector in stack/tracing. Each model gets its own service name in the trace views.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  - target:
+      group: serving.kserve.io
+      kind: LLMInferenceService
+    patch: |-
+      - op: add
+        path: /spec/template/containers/0/args/-
+        value: --otlp-traces-endpoint=http://otel-collector.tracing-system.svc.cluster.local:4317
+      - op: add
+        path: /spec/template/containers/0/env/-
+        value: {name: OTEL_EXPORTER_OTLP_TRACES_INSECURE, value: "true"}
+  - target:
+      kind: LLMInferenceService
+      name: gemma-3-270m-it
+    patch: |-
+      - op: add
+        path: /spec/template/containers/0/env/-
+        value: {name: OTEL_SERVICE_NAME, value: vllm-gemma-3-270m-it}
+  - target:
+      kind: LLMInferenceService
+      name: qwen3-0-6b
+    patch: |-
+      - op: add
+        path: /spec/template/containers/0/env/-
+        value: {name: OTEL_SERVICE_NAME, value: vllm-qwen3-0-6b}

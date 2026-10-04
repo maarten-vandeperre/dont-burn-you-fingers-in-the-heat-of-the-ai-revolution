@@ -1,0 +1,12 @@
+# Alternative: build the guardrails servers from upstream NeMo Guardrails instead of the TrustyAI
+# image (for example on an ARM laptop without an arm64 TrustyAI image):
+#   podman compose -f compose.yaml -f compose.upstream.yaml up --build -d
+# Difference: no /v1/guardrail/checks endpoint ("Check only" in the UI says so).
+services:
+  guardrails-qwen:
+    image: localhost/coffee-guardrails-nemo:0.24.1
+    build:
+      context: ./guardrails
+      dockerfile: Containerfile
+  guardrails-openai:
+    image: localhost/coffee-guardrails-nemo:0.24.1

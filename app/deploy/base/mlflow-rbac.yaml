@@ -1,0 +1,15 @@
+# The platform's OpenTelemetry collector forwards the coffee shop's AI traces to MLflow (workspace =
+# this project). mlflow-integration is the OpenShift AI role for service accounts that only write
+# traces, runs and models (no delete, no control plane).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: otel-collector-mlflow-integration
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mlflow-integration
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: tracing-system

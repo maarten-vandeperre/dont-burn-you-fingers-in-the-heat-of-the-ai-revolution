@@ -1,0 +1,15 @@
+# Blue-green: blue (v1) live.   ./deploy.sh app menu blue
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: coffee-menu
+  namespace: ai-demo
+spec:
+  hosts: [coffee-menu]
+  http:
+    - route:
+        - destination: {host: coffee-menu, subset: v1}
+      headers:
+        response:
+          set:
+            x-deployment-color: blue

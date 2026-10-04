@@ -1,0 +1,17 @@
+# Single-binary Tempo with local storage (demo/dev). For production use a TempoStack
+# with object storage. Services: tempo-platform (3200 query, 4317/4318 OTLP),
+# tempo-platform-jaegerui (+ Route).
+apiVersion: tempo.grafana.com/v1alpha1
+kind: TempoMonolithic
+metadata:
+  name: platform
+  namespace: tracing-system
+spec:
+  storage:
+    traces:
+      backend: pv
+      size: 10Gi
+  jaegerui:
+    enabled: true
+    route:
+      enabled: true

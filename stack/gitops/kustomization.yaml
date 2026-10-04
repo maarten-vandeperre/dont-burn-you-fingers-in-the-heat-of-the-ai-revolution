@@ -1,0 +1,8 @@
+# Argo Rollouts, cluster scoped (see CLUSTER_SCOPED_ARGO_ROLLOUTS_NAMESPACES in
+# stack/operators/gitops.yaml). Argo CD itself is the default "openshift-gitops" instance.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+commonAnnotations:
+  argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+resources:
+  - rollouts.yaml

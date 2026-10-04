@@ -1,0 +1,24 @@
+# The demo workloads. Secrets (model-router-secrets, inventory-db) are created by demo.sh.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ai-demo
+resources:
+  - namespace.yaml
+  - serviceaccounts.yaml
+  - imagestreams.yaml
+  - mongodb.yaml
+  - frontend.yaml
+  - rag-service.yaml
+  - model-router.yaml
+  - orders-service.yaml
+  - projection-service.yaml
+  - coffee-shop.yaml
+  - coffee-menu.yaml
+  - rhdh-actions-rbac.yaml
+  - mlflow-rbac.yaml
+configMapGenerator:
+  - name: ai-demo-config
+    envs:
+      - cluster-params.env
+    options:
+      disableNameSuffixHash: true

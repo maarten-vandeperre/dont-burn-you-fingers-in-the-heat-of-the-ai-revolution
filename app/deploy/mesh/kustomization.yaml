@@ -1,0 +1,13 @@
+# Service mesh configuration for ai-demo: STRICT mTLS, deny-by-default authorization,
+# ingress gateway, rag-service subsets and Envoy/app metrics for user workload monitoring.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ai-demo
+resources:
+  - peer-authentication.yaml
+  - authorization-policies.yaml
+  - ingress-gateway.yaml
+  - destination-rules.yaml
+  - rag-virtualservice.yaml
+  - coffee-menu-virtualservice.yaml
+  - podmonitor.yaml

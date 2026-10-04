@@ -1,0 +1,72 @@
+# EXTRA (not loaded at start). Copy into routes/ while Camel runs in dev mode:
+#   cp extras/compare-providers.camel.yaml routes/
+# and a new endpoint appears without a restart:
+#   POST /api/compare   {"prompt": "..."}  ->  [qwen answer, openai answer, anthropic answer]
+# Same question to all three providers in parallel (multicast), one combined answer.
+
+- rest:
+    id: compare-api
+    path: /api
+    post:
+      - id: post-compare
+        path: /compare
+        consumes: application/json
+        produces: application/json
+        to: direct:compare
+
+- route:
+    id: compare-providers
+    description: Ask qwen, openai and anthropic in parallel and return all three answers
+    from:
+      uri: direct:compare
+      steps:
+        - convertBodyTo:
+            type: java.lang.String
+        - multicast:
+            parallelProcessing: true
+            aggregationStrategy: "#class:org.apache.camel.processor.aggregate.GroupedBodyAggregationStrategy"
+            steps:
+              - to:
+                  uri: direct:compare-qwen
+              - to:
+                  uri: direct:compare-openai
+              - to:
+                  uri: direct:compare-anthropic
+        - setBody:
+            simple: "[${body[0]}, ${body[1]}, ${body[2]}]"
+        - setHeader:
+            name: Content-Type
+            constant: application/json
+
+- route:
+    id: compare-qwen
+    from:
+      uri: direct:compare-qwen
+      steps:
+        - setHeader:
+            name: provider
+            constant: qwen
+        - to:
+            uri: direct:chat
+
+- route:
+    id: compare-openai
+    from:
+      uri: direct:compare-openai
+      steps:
+        - setHeader:
+            name: provider
+            constant: openai
+        - to:
+            uri: direct:chat
+
+- route:
+    id: compare-anthropic
+    from:
+      uri: direct:compare-anthropic
+      steps:
+        - setHeader:
+            name: provider
+            constant: anthropic
+        - to:
+            uri: direct:chat

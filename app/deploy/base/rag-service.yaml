@@ -1,0 +1,148 @@
+# One Service, two versions. The VirtualService (mesh/ and patterns/) decides who gets which.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rag-service
+  labels:
+    app: rag-service
+    backstage.io/kubernetes-id: rag-service
+    app.kubernetes.io/part-of: ai-demo
+spec:
+  selector:
+    app: rag-service
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-service-v1
+  labels:
+    app: rag-service
+    version: v1
+    app.kubernetes.io/part-of: ai-demo
+    backstage.io/kubernetes-id: rag-service
+    app.openshift.io/runtime: quarkus
+  annotations:
+    app.openshift.io/connects-to: '[{"apiVersion":"apps/v1","kind":"Deployment","name":"model-router"}]'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rag-service
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: rag-service
+        version: v1
+        backstage.io/kubernetes-id: rag-service
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '8080'
+        prometheus.io/path: /q/metrics
+        proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+    spec:
+      serviceAccountName: rag-service
+      containers:
+      - name: app
+        image: rag-service:latest
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: OTEL_ENDPOINT
+          value: http://otel-collector.tracing-system.svc.cluster.local:4317
+        - name: APP_VERSION
+          value: v1
+        - name: RAG_TOP_K
+          value: '3'
+        - name: ROUTER_URL
+          value: http://model-router:8080/v1
+        readinessProbe:
+          httpGet:
+            path: /q/health/ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /q/health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 768Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rag-service-v2
+  labels:
+    app: rag-service
+    version: v2
+    app.kubernetes.io/part-of: ai-demo
+    backstage.io/kubernetes-id: rag-service
+    app.openshift.io/runtime: quarkus
+  annotations:
+    app.openshift.io/connects-to: '[{"apiVersion":"apps/v1","kind":"Deployment","name":"model-router"}]'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rag-service
+      version: v2
+  template:
+    metadata:
+      labels:
+        app: rag-service
+        version: v2
+        backstage.io/kubernetes-id: rag-service
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '8080'
+        prometheus.io/path: /q/metrics
+        proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+    spec:
+      serviceAccountName: rag-service
+      containers:
+      - name: app
+        image: rag-service:latest
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: OTEL_ENDPOINT
+          value: http://otel-collector.tracing-system.svc.cluster.local:4317
+        - name: APP_VERSION
+          value: v2
+        - name: RAG_TOP_K
+          value: '5'
+        - name: ROUTER_URL
+          value: http://model-router:8080/v1
+        readinessProbe:
+          httpGet:
+            path: /q/health/ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /q/health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 768Mi

@@ -1,0 +1,22 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ${{ values.name }}
+  description: ${{ values.description | dump }}
+  annotations:
+    backstage.io/source-location: url:https://${{ values.gitlabHost }}/ai-platform/${{ values.name }}/-/tree/main/
+    backstage.io/kubernetes-id: ${{ values.name }}
+    backstage.io/kubernetes-namespace: ${{ values.name }}
+  links:
+    - url: https://${{ values.name }}-${{ values.name }}.${{ values.appsDomain }}
+      title: Open the application
+      icon: dashboard
+  tags: [quarkus, langchain4j, react, llm]
+  labels:
+    ai-use-case: ${{ values.useCase | lower | replace("_", "-") }}
+    ai-size: ${{ values.size | lower }}
+spec:
+  type: website
+  lifecycle: experimental
+  owner: group:default/ai-app-team
+  system: models-as-a-service

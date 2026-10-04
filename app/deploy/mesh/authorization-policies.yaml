@@ -1,0 +1,164 @@
+# Who may access who. Identities come from the mTLS certificates (one service account per app).
+#
+#   (router) -> ai-demo-gateway -> frontend -> rag-service -> model-router -> MaaS / OpenAI
+#                                     |-> orders-service -> PostgreSQL (kafka ns)
+#                                     '-> projection-service -> MongoDB
+#   (router) -> ai-demo-gateway -> coffee-shop -> coffee-menu
+#                                     |-> model-router (order interpretation)
+#                                     '-> projection-service (audit trail, GET only)
+#
+# 1. deny everything in the namespace by default
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: deny-all
+spec: {}
+---
+# 2. the ingress gateway accepts traffic from the OpenShift router
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: gateway-from-router
+spec:
+  selector:
+    matchLabels:
+      istio: ai-demo-gateway
+  action: ALLOW
+  rules:
+    - {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: frontend-from-gateway
+spec:
+  selector:
+    matchLabels:
+      app: frontend
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/ai-demo/sa/ai-demo-gateway"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: rag-from-frontend
+spec:
+  selector:
+    matchLabels:
+      app: rag-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/ai-demo/sa/frontend"]
+      to:
+        - operation:
+            methods: ["GET", "POST"]
+            paths: ["/api/rag/*"]
+---
+# only the rag-service may use the models: the frontend gets 403 RBAC: access denied
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: model-router-from-rag
+spec:
+  selector:
+    matchLabels:
+      app: model-router
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/ai-demo/sa/rag-service"
+              - "cluster.local/ns/ai-demo/sa/coffee-shop"
+      to:
+        - operation:
+            paths: ["/v1/*"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: orders-from-frontend
+spec:
+  selector:
+    matchLabels:
+      app: orders-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/ai-demo/sa/frontend"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: projection-from-frontend
+spec:
+  selector:
+    matchLabels:
+      app: projection-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals:
+              - "cluster.local/ns/ai-demo/sa/frontend"
+              - "cluster.local/ns/ai-demo/sa/coffee-shop"
+      to:
+        - operation:
+            methods: ["GET"]
+---
+# TCP policy: only the projection-service may open a MongoDB connection
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: mongodb-from-projection
+spec:
+  selector:
+    matchLabels:
+      app: mongodb
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/ai-demo/sa/projection-service"]
+      to:
+        - operation:
+            ports: ["27017"]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: coffee-shop-from-gateway
+spec:
+  selector:
+    matchLabels:
+      app: coffee-shop
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/ai-demo/sa/ai-demo-gateway"]
+---
+# only the coffee shop may read the menu (GET); nothing may change it through the mesh
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: coffee-menu-from-coffee-shop
+spec:
+  selector:
+    matchLabels:
+      app: coffee-menu
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/ai-demo/sa/coffee-shop"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/api/menu", "/api/menu/*"]

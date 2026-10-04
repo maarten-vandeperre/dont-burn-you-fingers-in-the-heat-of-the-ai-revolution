@@ -1,0 +1,8 @@
+# MLflow tracking server. The mlflowoperator component itself is switched on in
+# platform/50-rhoai/rhoai-3.4/dsc-maas.yaml (one owner per DSC field).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+commonAnnotations:
+  argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+resources:
+  - mlflow.yaml

@@ -1,0 +1,87 @@
+# One OTLP entry point for everything: otel-collector.tracing-system.svc:4317 (gRPC) / :4318 (HTTP)
+#
+# Pipelines:
+#   traces         everything -> Tempo (console > Observe > Traces)
+#   traces/mlflow  only spans marked mlflow.export (the coffee shop's AI order flow) -> the
+#                  OpenShift AI MLflow server (OTLP/HTTP /mlflow/v1/traces), experiment "coffee-shop"
+#                  in workspace ai-demo. Authenticated with this collector's service account token
+#                  (RoleBinding mlflow-integration in ai-demo). Endpoint + experiment id come from
+#                  ConfigMap mlflow-tracing (written by app/demo.sh setup), over
+#                  mlflow-tracing-defaults.
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel
+  namespace: tracing-system
+spec:
+  mode: deployment
+  replicas: 1
+  envFrom:
+    - configMapRef:
+        name: mlflow-tracing-defaults
+    - configMapRef:
+        name: mlflow-tracing       # written by app/demo.sh setup, overrides the defaults
+        optional: true
+  config:
+    extensions:
+      bearertokenauth/mlflow:
+        filename: /var/run/secrets/kubernetes.io/serviceaccount/token
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+    processors:
+      batch: {}
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 15
+      # keep only the spans of an AI trace (marked by the application)
+      filter/mlflow:
+        error_mode: ignore
+        traces:
+          span:
+            - 'attributes["mlflow.export"] == nil'
+    exporters:
+      otlp:
+        endpoint: tempo-platform.tracing-system.svc.cluster.local:4317
+        tls:
+          insecure: true
+      otlphttp/mlflow:
+        traces_endpoint: ${env:MLFLOW_OTLP_TRACES_ENDPOINT}
+        compression: none
+        headers:
+          x-mlflow-experiment-id: ${env:MLFLOW_EXPERIMENT_ID}
+          X-MLFLOW-WORKSPACE: ${env:MLFLOW_WORKSPACE}
+        auth:
+          authenticator: bearertokenauth/mlflow
+        tls:
+          insecure_skip_verify: true   # lab clusters often use the self-signed router certificate
+        retry_on_failure:
+          enabled: true
+          max_elapsed_time: 60s
+    service:
+      extensions: [bearertokenauth/mlflow]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp]
+        traces/mlflow:
+          receivers: [otlp]
+          processors: [memory_limiter, filter/mlflow, batch]
+          exporters: [otlphttp/mlflow]
+---
+# Defaults keep the collector valid before app/demo.sh setup has created the MLflow experiment.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlflow-tracing-defaults
+  namespace: tracing-system
+data:
+  MLFLOW_OTLP_TRACES_ENDPOINT: http://mlflow-not-configured.invalid/v1/traces
+  MLFLOW_EXPERIMENT_ID: "0"
+  MLFLOW_WORKSPACE: ai-demo

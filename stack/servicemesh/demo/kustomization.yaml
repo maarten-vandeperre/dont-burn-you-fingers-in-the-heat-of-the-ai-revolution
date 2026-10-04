@@ -1,0 +1,10 @@
+# Bookinfo (upstream Istio sample, Apache-2.0) + a traffic generator, so Kiali and the
+# trace views have something to show right away.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: mesh-demo
+resources:
+  - namespace.yaml
+  - bookinfo.yaml
+  - traffic-generator.yaml
+  - podmonitor.yaml

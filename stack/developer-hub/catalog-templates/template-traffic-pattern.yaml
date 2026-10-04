@@ -1,0 +1,104 @@
+# Changes the rag-service VirtualService through the /platform-actions proxy (rhdh-platform-actions
+# token, only allowed to patch VirtualServices / Rollouts / scale in ai-demo and maas-models).
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: rag-traffic-pattern
+  title: "Mesh: switch rag-service traffic pattern"
+  description: Canary, A/B, blue-green or mirroring between rag-service v1 and v2 (Istio VirtualService)
+  tags: [service-mesh, istio, canary, blue-green, ab-testing, mirroring]
+spec:
+  owner: platform-team
+  type: platform-action
+  parameters:
+    - title: Pattern
+      required: [pattern]
+      properties:
+        pattern:
+          title: Pattern
+          type: string
+          default: canary
+          enum: [reset, canary, ab, blue, green, mirror]
+          enumNames:
+            - "Reset: 100% v1"
+            - "Canary: weighted split"
+            - "A/B: header x-variant=b goes to v2"
+            - "Blue-green: blue (v1) live"
+            - "Blue-green: green (v2) live"
+            - "Mirroring: v1 serves, v2 gets a shadow copy"
+        weight:
+          title: Canary weight for v2 (%)
+          type: integer
+          default: 10
+          minimum: 0
+          maximum: 100
+          ui:help: Only used for the canary pattern
+  steps:
+    - id: reset
+      if: ${{ parameters.pattern === 'reset' }}
+      name: Route 100% to v1
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/rag-service
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"route":[{"destination":{"host":"rag-service","subset":"v1"},"weight":100}]}]}}'
+    - id: canary
+      if: ${{ parameters.pattern === 'canary' }}
+      name: Canary split
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/rag-service
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"route":[{"destination":{"host":"rag-service","subset":"v1"},"weight":${{ 100 - parameters.weight }}},{"destination":{"host":"rag-service","subset":"v2"},"weight":${{ parameters.weight }}}]}]}}'
+    - id: ab
+      if: ${{ parameters.pattern === 'ab' }}
+      name: A/B on header x-variant
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/rag-service
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"match":[{"headers":{"x-variant":{"exact":"b"}}}],"route":[{"destination":{"host":"rag-service","subset":"v2"}}]},{"route":[{"destination":{"host":"rag-service","subset":"v1"}}]}]}}'
+    - id: blue
+      if: ${{ parameters.pattern === 'blue' }}
+      name: Blue (v1) live
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/rag-service
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"route":[{"destination":{"host":"rag-service","subset":"v1"}}],"headers":{"response":{"set":{"x-deployment-color":"blue"}}}}]}}'
+    - id: green
+      if: ${{ parameters.pattern === 'green' }}
+      name: Green (v2) live
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/rag-service
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"route":[{"destination":{"host":"rag-service","subset":"v2"}}],"headers":{"response":{"set":{"x-deployment-color":"green"}}}}]}}'
+    - id: mirror
+      if: ${{ parameters.pattern === 'mirror' }}
+      name: Mirror to v2
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/rag-service
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"route":[{"destination":{"host":"rag-service","subset":"v1"},"weight":100}],"mirror":{"host":"rag-service","subset":"v2"},"mirrorPercentage":{"value":100}}]}}'
+  output:
+    links:
+      - title: rag-service in the catalog
+        entityRef: component:default/rag-service
+      - title: Kiali graph (versioned)
+        url: https://kiali-istio-system.__APPS_DOMAIN__/console/graph/namespaces/?namespaces=ai-demo&graphType=versionedApp
+      - title: Demo UI (Traffic patterns tab)
+        url: https://ai-demo-ai-demo.__APPS_DOMAIN__

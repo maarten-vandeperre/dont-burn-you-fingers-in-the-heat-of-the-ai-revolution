@@ -1,0 +1,11 @@
+# Software templates kept in the platform repository in GitLab (app/software-templates).
+# Read through the GitLab integration; ./deploy.sh gitlab pushes them.
+apiVersion: backstage.io/v1alpha1
+kind: Location
+metadata:
+  name: software-templates
+  description: Project templates from GitLab ai-platform/platform
+spec:
+  type: url
+  targets:
+    - https://__GITLAB_HOST__/ai-platform/platform/-/blob/main/app/software-templates/llm-app/template.yaml

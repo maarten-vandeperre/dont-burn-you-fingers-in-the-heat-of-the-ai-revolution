@@ -1,0 +1,191 @@
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: openshift-platform
+  title: OpenShift platform services
+  description: Service mesh, tracing, Kafka + Debezium, GitOps, pipelines and Developer Hub
+  links:
+    - {url: "https://console-openshift-console.__APPS_DOMAIN__", title: OpenShift console, icon: dashboard}
+    - {url: "https://openshift-gitops-server-openshift-gitops.__APPS_DOMAIN__", title: Argo CD, icon: dashboard}
+spec:
+  owner: platform-team
+  domain: ai-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: openshift-ai
+  title: OpenShift AI 3.4
+  description: Dashboard, KServe + vLLM, Gen AI studio playground, MLflow, Models-as-a-Service
+  annotations:
+    backstage.io/kubernetes-namespace: redhat-ods-applications
+  links:
+    - {url: "https://console-openshift-console.__APPS_DOMAIN__/k8s/cluster/datasciencecluster.opendatahub.io~v2~DataScienceCluster/default-dsc", title: DataScienceCluster}
+  tags: [openshift-ai, mlflow, kserve]
+spec:
+  type: ai-platform
+  owner: platform-team
+  system: openshift-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: service-mesh
+  title: OpenShift Service Mesh 3
+  description: Istio control plane, STRICT mTLS and authorization in ai-demo, mesh-wide tracing
+  annotations:
+    backstage.io/kubernetes-namespace: istio-system
+    backstage.io/kubernetes-label-selector: app=istiod
+  links:
+    - {url: "https://kiali-istio-system.__APPS_DOMAIN__", title: Kiali, icon: dashboard}
+  tags: [istio, mtls, kiali]
+spec:
+  type: service-mesh
+  owner: platform-team
+  system: openshift-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: tracing
+  title: Distributed tracing (Tempo + OpenTelemetry)
+  description: One OTLP collector for apps, Envoy sidecars and vLLM; Tempo storage
+  annotations:
+    backstage.io/kubernetes-namespace: tracing-system
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/managed-by=opentelemetry-operator
+  links:
+    - {url: "https://console-openshift-console.__APPS_DOMAIN__/observe/traces", title: Traces in the console, icon: dashboard}
+    - {url: "https://tempo-platform-jaegerui-tracing-system.__APPS_DOMAIN__", title: Jaeger UI (Tempo)}
+  tags: [tracing, opentelemetry, tempo]
+spec:
+  type: observability
+  owner: platform-team
+  system: openshift-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: kafka-platform
+  title: Kafka cluster "platform"
+  description: Streams for Apache Kafka in KRaft mode, Kafka Connect with Debezium
+  annotations:
+    backstage.io/kubernetes-namespace: kafka
+    backstage.io/kubernetes-label-selector: strimzi.io/cluster in (platform,debezium)
+  tags: [kafka, strimzi]
+spec:
+  type: kafka-cluster
+  owner: platform-team
+  system: openshift-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: debezium-inventory-connector
+  title: Debezium connector inventory-postgres
+  description: Captures inventory.customers and inventory.orders into Kafka topics
+  annotations:
+    backstage.io/kubernetes-namespace: kafka
+    backstage.io/kubernetes-label-selector: strimzi.io/cluster=debezium
+  tags: [debezium, cdc]
+spec:
+  type: kafka-connector
+  owner: platform-team
+  system: openshift-platform
+  dependsOn: [resource:inventory-db, resource:kafka-platform]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: inventory-db
+  title: inventory-db (PostgreSQL)
+  description: System of record for customers and orders, logical decoding for Debezium
+  annotations:
+    backstage.io/kubernetes-namespace: kafka
+    backstage.io/kubernetes-label-selector: app=inventory-db
+  tags: [postgresql]
+spec:
+  type: database
+  owner: platform-team
+  system: openshift-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: mongodb
+  title: MongoDB read model
+  description: customer_views projection, only reachable by the projection-service (mesh policy)
+  annotations:
+    backstage.io/kubernetes-id: mongodb
+    backstage.io/kubernetes-namespace: ai-demo
+  tags: [mongodb]
+spec:
+  type: database
+  owner: ai-app-team
+  system: ai-demo
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: gitops-and-pipelines
+  title: OpenShift GitOps, Argo Rollouts and Pipelines
+  description: Argo CD (openshift-gitops), cluster scoped Argo Rollouts, Tekton
+  annotations:
+    backstage.io/kubernetes-namespace: openshift-gitops
+    argocd/app-selector: "app.kubernetes.io/part-of=ai-platform"
+  links:
+    - {url: "https://openshift-gitops-server-openshift-gitops.__APPS_DOMAIN__", title: Argo CD, icon: dashboard}
+    - {url: "https://console-openshift-console.__APPS_DOMAIN__/pipelines/all-namespaces", title: Pipelines}
+  tags: [argocd, argo-rollouts, tekton]
+spec:
+  type: delivery
+  owner: platform-team
+  system: openshift-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: developer-hub
+  title: Red Hat Developer Hub
+  description: This portal
+  annotations:
+    backstage.io/kubernetes-namespace: rhdh
+    backstage.io/kubernetes-label-selector: rhdh.redhat.com/app=backstage-developer-hub
+  tags: [backstage]
+spec:
+  type: developer-portal
+  owner: platform-team
+  system: openshift-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: keycloak-sso
+  title: Keycloak (single sign-on)
+  description: Red Hat build of Keycloak, realm "demo"; signs users in to Developer Hub and GitLab
+  annotations:
+    backstage.io/kubernetes-namespace: keycloak
+    backstage.io/kubernetes-label-selector: app=keycloak
+  links:
+    - {url: "https://platform-sso-keycloak.__APPS_DOMAIN__/admin/master/console/#/demo", title: Keycloak admin console, icon: dashboard}
+  tags: [keycloak, oidc, sso]
+spec:
+  type: identity-provider
+  owner: platform-team
+  system: openshift-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: gitlab
+  title: GitLab
+  description: Source code of the platform and the demo apps (group ai-platform)
+  annotations:
+    backstage.io/kubernetes-namespace: gitlab
+    backstage.io/kubernetes-label-selector: app=gitlab
+  links:
+    - {url: "https://__GITLAB_HOST__/ai-platform/platform", title: Platform repository, icon: github}
+  tags: [gitlab, scm]
+spec:
+  type: source-control
+  owner: platform-team
+  system: openshift-platform

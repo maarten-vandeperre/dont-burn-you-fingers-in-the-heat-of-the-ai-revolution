@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-generator
+  labels:
+    app: traffic-generator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-generator
+  template:
+    metadata:
+      labels:
+        app: traffic-generator
+    spec:
+      containers:
+        - name: curl
+          image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                curl -s -o /dev/null -w "%{http_code}\n" http://productpage:9080/productpage || true
+                sleep 2
+              done
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}

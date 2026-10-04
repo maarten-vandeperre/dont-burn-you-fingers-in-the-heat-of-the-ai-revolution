@@ -1,0 +1,254 @@
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: frontend-api
+  title: Demo BFF API
+  description: What the React UI calls (through the mesh ingress gateway)
+spec:
+  type: openapi
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  definition: |
+    openapi: 3.0.3
+    info: {title: AI demo backend-for-frontend, version: 1.0.0}
+    servers: [{url: "https://ai-demo-ai-demo.__APPS_DOMAIN__"}]
+    paths:
+      /api/ask:
+        post:
+          summary: Ask a question (RAG). Header x-variant=b routes to rag v2 in the A/B pattern.
+          parameters: [{name: x-variant, in: header, schema: {type: string}}]
+          requestBody: {content: {application/json: {schema: {$ref: "#/components/schemas/AskRequest"}}}}
+          responses: {"200": {description: answer with sources}}
+      /api/traffic:
+        get:
+          summary: Send n cheap calls to rag-service and count the versions that answered
+          parameters:
+            - {name: n, in: query, schema: {type: integer, default: 50}}
+            - {name: variant, in: query, schema: {type: string}}
+          responses: {"200": {description: version distribution}}
+      /api/mesh/probe:
+        get:
+          summary: Call every service with the frontend's mesh identity, report allowed / denied
+          responses: {"200": {description: probe results}}
+      /api/customers:
+        get: {summary: Customers from PostgreSQL, responses: {"200": {description: list}}}
+        post: {summary: Create a customer, responses: {"200": {description: created}}}
+      /api/orders:
+        post: {summary: Place an order, responses: {"200": {description: created}}}
+      /api/customer-views:
+        get: {summary: MongoDB read model built from the Debezium events, responses: {"200": {description: list}}}
+    components:
+      schemas:
+        AskRequest:
+          type: object
+          properties:
+            question: {type: string}
+            model: {type: string, enum: [auto, qwen, gemma, openai]}
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: rag-api
+  title: RAG API
+  description: Retrieval augmented generation over the platform docs
+spec:
+  type: openapi
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  definition: |
+    openapi: 3.0.3
+    info: {title: rag-service, version: 1.0.0}
+    servers: [{url: "http://rag-service.ai-demo.svc:8080"}]
+    paths:
+      /api/rag/ask:
+        post:
+          summary: Answer a question with retrieved context
+          requestBody:
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    question: {type: string}
+                    model: {type: string, enum: [auto, qwen, gemma, openai]}
+          responses: {"200": {description: "answer, sources, model, version, timings, tokens"}}
+      /api/rag/version:
+        get: {summary: Which version / pod served the request, responses: {"200": {description: version info}}}
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: model-router-api
+  title: Model router (OpenAI compatible)
+  description: One endpoint, four aliases; Camel decides the backend
+spec:
+  type: openapi
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  definition: |
+    openapi: 3.0.3
+    info: {title: model-router, version: 1.0.0, description: "Aliases: gemma, qwen (MaaS), openai, auto (qwen with OpenAI fallback)"}
+    servers: [{url: "http://model-router.ai-demo.svc:8080"}]
+    paths:
+      /v1/models:
+        get: {summary: List the aliases, responses: {"200": {description: OpenAI model list}}}
+      /v1/chat/completions:
+        post:
+          summary: OpenAI chat completion; response header x-model-backend tells the real backend
+          requestBody:
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    model: {type: string, enum: [gemma, qwen, openai, auto]}
+                    messages: {type: array, items: {type: object}}
+                    max_tokens: {type: integer}
+          responses:
+            "200": {description: chat completion}
+            "502": {description: backend failed (and no fallback available)}
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: orders-api
+  title: Orders API
+  description: Writes to PostgreSQL; every write becomes a Debezium event
+spec:
+  type: openapi
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  definition: |
+    openapi: 3.0.3
+    info: {title: orders-service, version: 1.0.0}
+    servers: [{url: "http://orders-service.ai-demo.svc:8080"}]
+    paths:
+      /api/customers:
+        get: {summary: List customers, responses: {"200": {description: list}}}
+        post: {summary: "Create customer {firstName, lastName, email}", responses: {"200": {description: created}}}
+      /api/customers/{id}:
+        put:
+          summary: Update customer
+          parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+          responses: {"200": {description: updated}}
+      /api/orders:
+        get: {summary: List orders, responses: {"200": {description: list}}}
+        post: {summary: "Create order {customerId, product, quantity}", responses: {"200": {description: created}}}
+      /api/orders/{id}:
+        delete:
+          summary: Delete order
+          parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+          responses: {"204": {description: deleted}}
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: customer-views-api
+  title: Customer views API (MongoDB read model)
+  description: One document per customer, maintained from Debezium change events
+spec:
+  type: openapi
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  definition: |
+    openapi: 3.0.3
+    info: {title: projection-service, version: 1.0.0}
+    servers: [{url: "http://projection-service.ai-demo.svc:8080"}]
+    paths:
+      /api/customer-views:
+        get:
+          summary: "All customer views: fullName, email, orders, totals, lastChange, history"
+          responses: {"200": {description: list}}
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: coffee-shop-api
+  title: Coffee shop API
+  description: Order in natural language, place and progress orders, read the audit trail
+spec:
+  type: openapi
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  definition: |
+    openapi: 3.0.3
+    info: {title: coffee-shop, version: 1.0.0}
+    servers: [{url: "https://coffee-ai-demo.__APPS_DOMAIN__"}]
+    paths:
+      /api/interpret:
+        post:
+          summary: "Interpret {text} with the model, price it with the live menu, return a quote"
+          responses: {"200": {description: quote or clarification}}
+      /api/orders:
+        get: {summary: Latest orders from PostgreSQL, responses: {"200": {description: list}}}
+        post: {summary: "Place the order for {quoteId}", responses: {"200": {description: order}}}
+      /api/orders/{id}/advance:
+        post:
+          summary: PLACED -> BREWING -> READY -> COLLECTED
+          parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+          responses: {"200": {description: order}}
+      /api/orders/{id}:
+        delete:
+          summary: Cancel an order
+          parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+          responses: {"204": {description: cancelled}}
+      /api/audit:
+        get: {summary: Audit trail from MongoDB (via the projection-service), responses: {"200": {description: events}}}
+      /api/menu:
+        get: {summary: "Menu the shop prices with: live, cache or built-in default", responses: {"200": {description: menu}}}
+      /api/menu/probe:
+        get: {summary: "n raw calls to coffee-menu: versions, errors, latency", responses: {"200": {description: probe result}}}
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: coffee-menu-api
+  title: Coffee menu API
+  description: Drinks and prices; v2 adds a mocha and a seasonal drink
+spec:
+  type: openapi
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  definition: |
+    openapi: 3.0.3
+    info: {title: coffee-menu, version: 1.0.0}
+    servers: [{url: "http://coffee-menu.ai-demo.svc:8080"}]
+    paths:
+      /api/menu:
+        get: {summary: "Menu: version, pod, items (drink, priceCents, milk, seasonal)", responses: {"200": {description: menu}}}
+      /api/menu/{drink}:
+        get:
+          summary: One drink
+          parameters: [{name: drink, in: path, required: true, schema: {type: string}}]
+          responses: {"200": {description: item}, "404": {description: not on this menu version}}
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: coffee-audit-api
+  title: Coffee audit API (MongoDB)
+  description: Every change of the coffee orders in PostgreSQL, as captured by Debezium
+spec:
+  type: openapi
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  definition: |
+    openapi: 3.0.3
+    info: {title: projection-service coffee audit, version: 1.0.0}
+    servers: [{url: "http://projection-service.ai-demo.svc:8080"}]
+    paths:
+      /api/coffee-audit:
+        get:
+          summary: "Newest first: table, operation, orderId, summary, before, after, Kafka offset"
+          parameters:
+            - {name: limit, in: query, schema: {type: integer, default: 100}}
+            - {name: orderId, in: query, schema: {type: integer}}
+          responses: {"200": {description: events}}

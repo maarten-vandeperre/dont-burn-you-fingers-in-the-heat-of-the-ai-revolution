@@ -1,0 +1,37 @@
+# WORKAROUND (COO 1.5): client.kubernetesAuth on the datasource does not add the bearer token to
+# the Perses secret, and the operator overwrites manual fixes when it reconciles. This CronJob
+# re-applies the token reference every 10 minutes (deploy.sh also runs it once right away).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: perses-auth-fix
+  namespace: redhat-ods-monitoring
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 600
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: fix
+              image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  PERSES=http://data-science-perses.redhat-ods-monitoring.svc:8080
+                  for i in $(seq 1 30); do curl -sf $PERSES/api/v1/health >/dev/null 2>&1 && break; sleep 5; done
+                  curl -sf -X PUT "$PERSES/api/v1/globalsecrets/thanos-querier-global-datasource-secret" \
+                    -H "Content-Type: application/json" \
+                    -d '{"kind":"GlobalSecret","metadata":{"name":"thanos-querier-global-datasource-secret"},"spec":{"authorization":{"type":"Bearer","credentialsFile":"/var/run/secrets/kubernetes.io/serviceaccount/token"},"tlsConfig":{"caFile":"/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"}}}'
+                  echo
+                  RESULT=$(curl -sf "$PERSES/proxy/globaldatasources/thanos-querier-global-datasource/api/v1/query?query=count(up)" 2>/dev/null)
+                  echo "$RESULT" | grep -q '"success"' && echo "OK: Perses proxy to Thanos works" || { echo "WARN: $RESULT"; exit 1; }
+              resources:
+                requests: {cpu: 10m, memory: 32Mi}
+                limits: {cpu: 100m, memory: 128Mi}

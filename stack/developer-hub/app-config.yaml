@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config-rhdh
+data:
+  app-config.yaml: |
+    app:
+      title: AI Platform Developer Hub
+      baseUrl: https://${RHDH_HOST}
+    backend:
+      baseUrl: https://${RHDH_HOST}
+      cors:
+        origin: https://${RHDH_HOST}
+      auth:
+        externalAccess:
+          - type: legacy
+            options:
+              subject: legacy-default-config
+              secret: ${BACKEND_SECRET}
+      reading:
+        allow:
+          - host: "*.svc"
+          - host: "*.svc.cluster.local"
+
+    # Sign-in with Keycloak (realm "demo", user DEMO_ADMIN_USER). The resolver maps the
+    # Keycloak username onto the User entity with the same name in the catalog (org.yaml).
+    signInPage: oidc
+    auth:
+      environment: production
+      session:
+        secret: ${BACKEND_SECRET}
+      providers:
+        oidc:
+          production:
+            metadataUrl: ${KEYCLOAK_URL}/realms/demo/.well-known/openid-configuration
+            clientId: developer-hub
+            clientSecret: ${DEVHUB_CLIENT_SECRET}
+            prompt: auto
+            callbackUrl: https://${RHDH_HOST}/api/auth/oidc/handler/frame
+            signIn:
+              resolvers:
+                - resolver: preferredUsernameMatchingUserEntityName
+
+    # Source code lives in the demo GitLab ("View source" on every component)
+    integrations:
+      gitlab:
+        - host: ${GITLAB_HOST}
+          apiBaseUrl: https://${GITLAB_HOST}/api/v4
+          token: ${GITLAB_TOKEN}
+
+    # The whole platform as catalog entities (ConfigMap rhdh-catalog, mounted as files)
+    catalog:
+      rules:
+        - allow: [Component, System, Domain, API, Resource, Group, User, Location, Template]
+      locations:
+        - type: file
+          target: /opt/app-root/src/catalog/catalog-info.yaml
+          rules:
+            - allow: [Component, System, Domain, API, Resource, Group, User, Location, Template]
+
+    # Kubernetes, Topology and Tekton tabs read the cluster with the rhdh-kubernetes identity
+    kubernetes:
+      serviceLocatorMethod:
+        type: multiTenant
+      clusterLocatorMethods:
+        - type: config
+          clusters:
+            - name: ${K8S_CLUSTER_NAME}
+              url: ${K8S_CLUSTER_URL}
+              authProvider: serviceAccount
+              skipTLSVerify: true
+              skipMetricsLookup: false
+              serviceAccountToken: ${K8S_CLUSTER_TOKEN}
+      customResources:
+        - {group: route.openshift.io, apiVersion: v1, plural: routes}
+        - {group: tekton.dev, apiVersion: v1, plural: pipelineruns}
+        - {group: tekton.dev, apiVersion: v1, plural: taskruns}
+        - {group: argoproj.io, apiVersion: v1alpha1, plural: rollouts}
+        - {group: networking.istio.io, apiVersion: v1, plural: virtualservices}
+        - {group: networking.istio.io, apiVersion: v1, plural: destinationrules}
+        - {group: serving.kserve.io, apiVersion: v1alpha1, plural: llminferenceservices}
+        - {group: maas.opendatahub.io, apiVersion: v1alpha1, plural: maasmodelrefs}
+        - {group: kafka.strimzi.io, apiVersion: v1beta2, plural: kafkas}
+        - {group: kafka.strimzi.io, apiVersion: v1beta2, plural: kafkaconnects}
+        - {group: kafka.strimzi.io, apiVersion: v1beta2, plural: kafkaconnectors}
+
+    # Argo CD tab: the default OpenShift GitOps instance
+    argocd:
+      username: admin
+      password: ${ARGOCD_PASSWORD}
+      appLocatorMethods:
+        - type: config
+          instances:
+            - name: openshift-gitops
+              url: https://openshift-gitops-server.openshift-gitops.svc.cluster.local
+              username: admin
+              password: ${ARGOCD_PASSWORD}
+
+    # Write path for the software templates (http:backstage:request -> this proxy -> Kubernetes
+    # API) with the narrowly scoped rhdh-platform-actions token. Only GET and PATCH.
+    proxy:
+      endpoints:
+        /platform-actions:
+          target: ${K8S_CLUSTER_URL}
+          changeOrigin: true
+          secure: false
+          credentials: require
+          allowedMethods: [GET, PATCH]
+          headers:
+            Authorization: Bearer ${K8S_ACTIONS_TOKEN}

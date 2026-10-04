@@ -1,0 +1,18 @@
+# A/B test: the request decides. x-variant: b -> v2 (bullet answers with citations), rest -> v1.
+# The UI sends the header when "x-variant: b" is ticked.      app/demo.sh pattern ab
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: rag-service
+  namespace: ai-demo
+spec:
+  hosts: [rag-service]
+  http:
+    - match:
+        - headers:
+            x-variant:
+              exact: b
+      route:
+        - destination: {host: rag-service, subset: v2}
+    - route:
+        - destination: {host: rag-service, subset: v1}

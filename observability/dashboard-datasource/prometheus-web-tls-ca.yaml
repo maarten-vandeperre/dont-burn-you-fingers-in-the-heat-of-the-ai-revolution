@@ -1,0 +1,8 @@
+# WORKAROUND (COO 1.5): the Prometheus StatefulSet mounts this secret but nothing creates it;
+# without it the Prometheus pod stays in Init forever.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: prometheus-web-tls-ca
+  namespace: redhat-ods-monitoring
+type: Opaque

@@ -1,0 +1,64 @@
+# Guarded Coffee: podman compose up --build -d      (UI: http://localhost:8080)
+#
+#   browser -> coffee-app (Quarkus + React) -+-> guardrails-qwen   -> Qwen on Podman AI Lab
+#                                            +-> guardrails-openai -> OpenAI
+#   both guardrails servers use the SAME rules: ./guardrails/config/coffee
+#   guardrails -> coffee-app /api/clock   (the shop clock for "no cappuccino after noon")
+#
+# Configuration: .env (copy .env.example).
+name: coffee-guardrails
+
+x-guardrails: &guardrails
+  image: ${GUARDRAILS_IMAGE:-quay.io/trustyai/nemo-guardrails-server:latest}
+  pull_policy: missing        # pull only when not present locally (./start.sh pulls it once, with retries)
+  volumes:
+    - ./guardrails/config/coffee:/app/config/coffee:Z
+  restart: unless-stopped
+
+services:
+  guardrails-qwen:
+    <<: *guardrails
+    environment:
+      CONFIG_ID: coffee                         # default configuration (as on OpenShift AI)
+      MAIN_MODEL_ENGINE: openai                 # OpenAI-compatible API (AI Lab speaks it too)
+      MAIN_MODEL_BASE_URL: ${QWEN_BASE_URL}
+      OPENAI_API_KEY: ${QWEN_API_KEY:-not-needed}
+      SHOP_CLOCK_URL: http://coffee-app:8080/api/clock
+      SHOP_TIMEZONE: ${SHOP_TIMEZONE:-Europe/Brussels}
+      COFFEE_MAX_CHARS: "200"
+    ports:
+      - "8000:8000"
+
+  guardrails-openai:
+    <<: *guardrails
+    # same image as guardrails-qwen: never pull it a second time in parallel (registries answer
+    # "too many requests"); it is created after guardrails-qwen, when the image is there
+    pull_policy: never
+    depends_on:
+      - guardrails-qwen
+    environment:
+      CONFIG_ID: coffee
+      MAIN_MODEL_ENGINE: openai
+      MAIN_MODEL_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-not-configured}
+      SHOP_CLOCK_URL: http://coffee-app:8080/api/clock
+      SHOP_TIMEZONE: ${SHOP_TIMEZONE:-Europe/Brussels}
+      COFFEE_MAX_CHARS: "200"
+    ports:
+      - "8001:8000"
+
+  coffee-app:
+    build: .
+    environment:
+      QWEN_GUARDRAILS_URL: http://guardrails-qwen:8000
+      QWEN_MODEL: ${QWEN_MODEL:-qwen}
+      OPENAI_GUARDRAILS_URL: http://guardrails-openai:8000
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      DEFAULT_PROVIDER: ${DEFAULT_PROVIDER:-qwen}
+      SHOP_TIMEZONE: ${SHOP_TIMEZONE:-Europe/Brussels}
+    ports:
+      - "8080:8080"
+    depends_on:
+      - guardrails-qwen
+      - guardrails-openai
+    restart: unless-stopped

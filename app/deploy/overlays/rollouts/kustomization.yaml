@@ -1,0 +1,17 @@
+# Same demo, but the model-router is an Argo Rollout with an automated, mesh-driven canary:
+# 20% -> pause 60s -> 50% -> pause 60s -> 100%. Trigger: app/demo.sh rollout
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - ../../mesh
+  - ../../monitoring
+  - model-router-rollout.yaml
+patches:
+  - patch: |-
+      $patch: delete
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: model-router
+        namespace: ai-demo

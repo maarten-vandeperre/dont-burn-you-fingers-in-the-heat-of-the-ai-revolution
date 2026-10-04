@@ -1,0 +1,9 @@
+.gradle/
+build/
+**/build/
+node_modules/
+frontend/src/main/webui/dist/
+frontend/src/main/resources/META-INF/resources/
+.idea/
+*.iml
+*.tsbuildinfo

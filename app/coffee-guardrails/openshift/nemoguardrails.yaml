@@ -1,0 +1,58 @@
+# The same guardrails on OpenShift AI 3.4 (TrustyAI operator, DSC component trustyai Managed).
+# The ConfigMap comes from the very same files as locally:
+#   oc create configmap coffee --from-file=guardrails/config/coffee/ -n coffee-guardrails
+# Secret with the model key (a MaaS API key for the platform's Qwen):
+#   oc create secret generic coffee-llm -n coffee-guardrails --from-literal=key=<MaaS API key>
+apiVersion: trustyai.opendatahub.io/v1alpha1
+kind: NemoGuardrails
+metadata:
+  name: coffee-guardrails
+  namespace: coffee-guardrails
+spec:
+  nemoConfigs:
+    - name: coffee                 # mounted at /app/config/coffee, as in compose.yaml
+      configMaps:
+        - coffee
+      default: true
+  env:
+    - name: MAIN_MODEL_ENGINE
+      value: openai
+    - name: MAIN_MODEL_BASE_URL    # the platform's Qwen through Models-as-a-Service
+      value: https://maas.CHANGE-ME-APPS-DOMAIN/maas-models/qwen3-0-6b/v1
+    - name: OPENAI_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: coffee-llm
+          key: key
+    - name: SHOP_CLOCK_URL
+      value: http://coffee-app.coffee-guardrails.svc:8080/api/clock
+    - name: SHOP_TIMEZONE
+      value: Europe/Brussels
+---
+# The same rules in front of OpenAI. Secret with the OpenAI key:
+#   oc create secret generic coffee-openai -n coffee-guardrails --from-literal=key=sk-...
+apiVersion: trustyai.opendatahub.io/v1alpha1
+kind: NemoGuardrails
+metadata:
+  name: coffee-guardrails-openai
+  namespace: coffee-guardrails
+spec:
+  nemoConfigs:
+    - name: coffee                 # the same ConfigMap, the same rules
+      configMaps:
+        - coffee
+      default: true
+  env:
+    - name: MAIN_MODEL_ENGINE
+      value: openai
+    - name: MAIN_MODEL_BASE_URL
+      value: https://api.openai.com/v1
+    - name: OPENAI_API_KEY
+      valueFrom:
+        secretKeyRef:
+          name: coffee-openai
+          key: key
+    - name: SHOP_CLOCK_URL
+      value: http://coffee-app.coffee-guardrails.svc:8080/api/clock
+    - name: SHOP_TIMEZONE
+      value: Europe/Brussels

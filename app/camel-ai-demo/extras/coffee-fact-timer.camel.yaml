@@ -1,0 +1,29 @@
+# EXTRA (not loaded at start). Copy into routes/ while Camel runs in dev mode:
+#   cp extras/coffee-fact-timer.camel.yaml routes/
+# Every two minutes it asks the gateway (alias auto) for a coffee fact and logs it.
+# Delete the file again and the route disappears.
+
+- route:
+    id: coffee-fact-timer
+    description: Scheduled AI call through the gateway
+    from:
+      uri: timer:coffee-fact
+      parameters:
+        period: "120000"
+        delay: "5000"
+      steps:
+        - setBody:
+            constant: '{"prompt": "Tell me one surprising fact about coffee, in one sentence."}'
+        - setHeader:
+            name: provider
+            constant: auto
+        - to:
+            uri: direct:chat
+        - setVariable:
+            name: fact
+            jsonpath:
+              expression: "$.answer"
+              resultType: java.lang.String
+              suppressExceptions: true
+        - log:
+            message: "coffee fact (${jsonpath($.provider)}): ${variable.fact}"

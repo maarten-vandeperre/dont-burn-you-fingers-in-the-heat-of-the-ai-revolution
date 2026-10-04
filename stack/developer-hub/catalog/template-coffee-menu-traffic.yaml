@@ -1,0 +1,111 @@
+# Changes the coffee-menu VirtualService through the /platform-actions proxy (scoped token).
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: coffee-menu-traffic
+  title: "Coffee menu: traffic & chaos"
+  description: Canary, blue-green or mirroring between coffee-menu v1 and v2, or inject delays and errors
+  tags: [service-mesh, chaos, canary, blue-green, mirroring]
+spec:
+  owner: platform-team
+  type: platform-action
+  parameters:
+    - title: Scenario
+      required: [scenario]
+      properties:
+        scenario:
+          title: Scenario
+          type: string
+          default: delay
+          enum: [reset, canary, blue, green, mirror, delay, abort]
+          enumNames:
+            - "Reset: 100% v1, no faults"
+            - "Canary: percentage to v2"
+            - "Blue-green: blue (v1) live"
+            - "Blue-green: green (v2) live"
+            - "Mirroring: v1 serves, v2 gets a shadow copy"
+            - "Chaos: 3 s delay on a percentage of calls"
+            - "Chaos: HTTP 503 on a percentage of calls"
+        percent:
+          title: Percentage (canary, delay, abort)
+          type: integer
+          default: 50
+          minimum: 0
+          maximum: 100
+  steps:
+    - id: reset
+      if: ${{ parameters.scenario === 'reset' }}
+      name: All traffic to v1
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/coffee-menu
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"route":[{"destination":{"host":"coffee-menu","subset":"v1"}}]}]}}'
+    - id: canary
+      if: ${{ parameters.scenario === 'canary' }}
+      name: Canary split
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/coffee-menu
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"route":[{"destination":{"host":"coffee-menu","subset":"v1"},"weight":${{ 100 - parameters.percent }}},{"destination":{"host":"coffee-menu","subset":"v2"},"weight":${{ parameters.percent }}}]}]}}'
+    - id: blue
+      if: ${{ parameters.scenario === 'blue' }}
+      name: Blue (v1) live
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/coffee-menu
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"route":[{"destination":{"host":"coffee-menu","subset":"v1"}}],"headers":{"response":{"set":{"x-deployment-color":"blue"}}}}]}}'
+    - id: green
+      if: ${{ parameters.scenario === 'green' }}
+      name: Green (v2) live
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/coffee-menu
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"route":[{"destination":{"host":"coffee-menu","subset":"v2"}}],"headers":{"response":{"set":{"x-deployment-color":"green"}}}}]}}'
+    - id: mirror
+      if: ${{ parameters.scenario === 'mirror' }}
+      name: Mirror to v2
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/coffee-menu
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"route":[{"destination":{"host":"coffee-menu","subset":"v1"}}],"mirror":{"host":"coffee-menu","subset":"v2"},"mirrorPercentage":{"value":100}}]}}'
+    - id: delay
+      if: ${{ parameters.scenario === 'delay' }}
+      name: Inject a 3 s delay
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/coffee-menu
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"fault":{"delay":{"fixedDelay":"3s","percentage":{"value":${{ parameters.percent }}}}},"route":[{"destination":{"host":"coffee-menu","subset":"v1"}}]}]}}'
+    - id: abort
+      if: ${{ parameters.scenario === 'abort' }}
+      name: Inject HTTP 503
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/networking.istio.io/v1/namespaces/ai-demo/virtualservices/coffee-menu
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"http":[{"fault":{"abort":{"httpStatus":503,"percentage":{"value":${{ parameters.percent }}}}},"route":[{"destination":{"host":"coffee-menu","subset":"v1"}}]}]}}'
+  output:
+    links:
+      - title: coffee-menu in the catalog
+        entityRef: component:default/coffee-menu
+      - title: Coffee shop (Menu & resilience tab)
+        url: https://coffee-ai-demo.apps.CHANGE-ME.example.com

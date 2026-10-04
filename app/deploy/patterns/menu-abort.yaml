@@ -1,0 +1,17 @@
+# Chaos: HTTP 503 on 30% of the calls. Retries and the cached menu keep ordering working.
+#   ./deploy.sh app menu abort [percent]
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: coffee-menu
+  namespace: ai-demo
+spec:
+  hosts: [coffee-menu]
+  http:
+    - fault:
+        abort:
+          httpStatus: 503
+          percentage:
+            value: 30.0
+      route:
+        - destination: {host: coffee-menu, subset: v1}

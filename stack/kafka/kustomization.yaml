@@ -1,0 +1,15 @@
+# Streams for Apache Kafka (KRaft, no ZooKeeper) + Debezium change data capture:
+#   inventory-db (PostgreSQL, logical decoding) --Debezium--> Kafka topics inventory.inventory.*
+# The "inventory-db" Secret is created by deploy.sh, never stored in git.
+# Single broker/controller node for demos: bump replicas + replication factors for production.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kafka
+commonAnnotations:
+  argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+resources:
+  - namespace.yaml
+  - kafka.yaml
+  - inventory-db.yaml
+  - kafka-connect.yaml
+  - connector.yaml

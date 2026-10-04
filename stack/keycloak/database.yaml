@@ -1,0 +1,70 @@
+# PostgreSQL for Keycloak (the operator does not manage a database). Secret keycloak-sso-db
+# (username, password) is created by deploy.sh.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: platform-sso-db
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-sso-db
+spec:
+  selector:
+    app: platform-sso-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-sso-db
+  labels:
+    app: platform-sso-db
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: platform-sso-db
+  template:
+    metadata:
+      labels:
+        app: platform-sso-db
+    spec:
+      containers:
+        - name: postgres
+          image: registry.redhat.io/rhel9/postgresql-16@sha256:3943bfa5de044d8f033df148c0409ed826171b779f3cf3ddf537a1914960ab57
+          env:
+            - name: POSTGRESQL_DATABASE
+              value: keycloak
+            - name: POSTGRESQL_USER
+              valueFrom:
+                secretKeyRef: {name: keycloak-sso-db, key: username}
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: keycloak-sso-db, key: password}
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["/usr/libexec/check-container"]
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/pgsql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: platform-sso-db

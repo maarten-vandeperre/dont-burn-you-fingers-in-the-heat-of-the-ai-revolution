@@ -1,0 +1,104 @@
+# File system integration: drop a text file in data/inbox and get a summary in data/outbox,
+# written by whichever model {{demo.files.provider}} points at (auto by default).
+#
+# files-translate starts DISABLED (autoStartup: false): enable it live during the demo with
+#   camel cmd start-route --id=files-translate      (or in Hawtio / the developer console)
+# then drop files in data/inbox/translate to get a Dutch version in data/outbox.
+
+- route:
+    id: files-summarize
+    description: data/inbox/*.txt|*.md  ->  LLM summary  ->  data/outbox/<name>.summary.md
+    from:
+      uri: "file:{{demo.inbox}}"
+      parameters:
+        include: '.*\.(txt|md)'
+        move: ".done/${date:now:yyyyMMdd-HHmmss}-${file:name}"
+        readLock: changed
+      steps:
+        - setVariable:
+            name: fileName
+            simple: "${file:onlyname.noext}"
+        - log:
+            message: "summarising ${file:name} with {{demo.files.provider}}"
+        - setHeader:
+            name: text
+            simple: "${bodyAs(String)}"
+        - setBody:
+            constant: "{}"
+        - setBody:
+            jq:
+              expression: '{prompt: ("Summarise the following text in at most five bullet points. Answer in markdown.\n\n" + header("text"))}'
+        - convertBodyTo:
+            type: java.lang.String
+        - setHeader:
+            name: provider
+            constant: "{{demo.files.provider}}"
+        - to:
+            uri: direct:chat
+        - setVariable:
+            name: answer
+            jsonpath:
+              expression: "$.answer"
+              resultType: java.lang.String
+              suppressExceptions: true
+        - setVariable:
+            name: usedProvider
+            jsonpath:
+              expression: "$.provider"
+              resultType: java.lang.String
+              suppressExceptions: true
+        - setVariable:
+            name: error
+            jsonpath:
+              expression: "$.error"
+              resultType: java.lang.String
+              suppressExceptions: true
+        - setBody:
+            simple: "# Summary of ${variable.fileName}\n\n${variable.answer}${variable.error}\n\n_written by Camel with provider ${variable.usedProvider}_\n"
+        - to:
+            uri: "file:{{demo.outbox}}"
+            parameters:
+              fileName: "${variable.fileName}.summary.md"
+        - log:
+            message: "wrote {{demo.outbox}}/${variable.fileName}.summary.md"
+
+- route:
+    id: files-translate
+    description: data/inbox/translate/*  ->  Dutch translation  ->  data/outbox/<name>.nl.md (starts disabled)
+    autoStartup: false
+    from:
+      uri: "file:{{demo.inbox}}/translate"
+      parameters:
+        include: '.*\.(txt|md)'
+        move: ".done/${date:now:yyyyMMdd-HHmmss}-${file:name}"
+        readLock: changed
+      steps:
+        - setVariable:
+            name: fileName
+            simple: "${file:onlyname.noext}"
+        - setHeader:
+            name: text
+            simple: "${bodyAs(String)}"
+        - setBody:
+            constant: "{}"
+        - setBody:
+            jq:
+              expression: '{system: "You are a professional translator. Translate to Dutch. Return only the translation.", prompt: header("text")}'
+        - convertBodyTo:
+            type: java.lang.String
+        - setHeader:
+            name: provider
+            constant: "{{demo.files.provider}}"
+        - to:
+            uri: direct:chat
+        - setBody:
+            jsonpath:
+              expression: "$.answer"
+              resultType: java.lang.String
+              suppressExceptions: true
+        - to:
+            uri: "file:{{demo.outbox}}"
+            parameters:
+              fileName: "${variable.fileName}.nl.md"
+        - log:
+            message: "wrote {{demo.outbox}}/${variable.fileName}.nl.md"

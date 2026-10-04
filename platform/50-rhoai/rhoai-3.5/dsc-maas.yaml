@@ -1,0 +1,18 @@
+# RHOAI 3.5+: MaaS moved to the aigateway component
+# (kserve.modelsAsService is frozen/deprecated in 3.5, do not set it here)
+apiVersion: datasciencecluster.opendatahub.io/v2
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+spec:
+  components:
+    kserve:
+      managementState: Managed
+    aigateway:
+      managementState: Managed
+      modelsAsAService:
+        managementState: Managed
+    # OGX (the Gen AI playground backend) is deliberately NOT set here: on several RHOAI
+    # 3.5.x installs its module CRD is missing, and "ogx: Managed" then keeps the whole
+    # DSC at Ready=False. Enable it with "./deploy.sh playground", which rolls it back
+    # automatically when it hits that issue.

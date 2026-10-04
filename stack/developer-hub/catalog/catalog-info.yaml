@@ -1,0 +1,18 @@
+apiVersion: backstage.io/v1alpha1
+kind: Location
+metadata:
+  name: ai-platform
+  description: Everything on the OpenShift 4.22 AI platform
+spec:
+  targets:
+    - ./org.yaml
+    - ./platform.yaml
+    - ./models.yaml
+    - ./ai-demo.yaml
+    - ./apis.yaml
+    - ./template-traffic-pattern.yaml
+    - ./template-model-router-rollout.yaml
+    - ./template-scale-service.yaml
+    - ./template-scale-model.yaml
+    - ./template-coffee-menu-traffic.yaml
+    - ./software-templates.yaml

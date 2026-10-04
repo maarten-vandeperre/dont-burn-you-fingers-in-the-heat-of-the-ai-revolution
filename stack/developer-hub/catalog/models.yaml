@@ -1,0 +1,59 @@
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: models-as-a-service
+  title: Models-as-a-Service
+  description: Self-hosted models behind the MaaS gateway (API keys, token quotas, usage)
+  links:
+    - {url: "https://maas.apps.CHANGE-ME.example.com/v1/models", title: MaaS endpoint}
+spec:
+  owner: platform-team
+  domain: ai-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: gemma-3-270m-it
+  title: Gemma 3 270M instruct
+  description: Smallest Gemma 3 model, vLLM on CPU, published through MaaS (gated on Hugging Face)
+  annotations:
+    backstage.io/kubernetes-id: gemma-3-270m-it
+    backstage.io/kubernetes-namespace: maas-models
+  links:
+    - {url: "https://huggingface.co/google/gemma-3-270m-it", title: Model card}
+  tags: [llm, gemma, vllm]
+spec:
+  type: ai-model
+  owner: platform-team
+  system: models-as-a-service
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: qwen3-0-6b
+  title: Qwen3 0.6B
+  description: Smallest Qwen3 model, vLLM on CPU, published through MaaS, tool calling enabled
+  annotations:
+    backstage.io/kubernetes-id: qwen3-0-6b
+    backstage.io/kubernetes-namespace: maas-models
+  links:
+    - {url: "https://huggingface.co/Qwen/Qwen3-0.6B", title: Model card}
+  tags: [llm, qwen, vllm]
+spec:
+  type: ai-model
+  owner: platform-team
+  system: models-as-a-service
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: openai
+  title: OpenAI API
+  description: External model provider, used by the model-router for alias "openai" and as fallback
+  links:
+    - {url: "https://platform.openai.com/docs/api-reference/chat", title: API reference}
+  tags: [llm, external]
+spec:
+  type: ai-model
+  owner: platform-team
+  system: models-as-a-service

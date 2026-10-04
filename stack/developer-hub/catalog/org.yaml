@@ -1,0 +1,39 @@
+apiVersion: backstage.io/v1alpha1
+kind: Group
+metadata:
+  name: platform-team
+  description: Runs OpenShift, OpenShift AI, the mesh, Kafka and the developer platform
+spec:
+  type: team
+  children: []
+  members: [admin]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Group
+metadata:
+  name: ai-app-team
+  description: Builds the AI demo applications
+spec:
+  type: team
+  children: []
+  members: [admin]
+---
+apiVersion: backstage.io/v1alpha1
+kind: User
+metadata:
+  name: admin
+  description: The demo user (Keycloak realm "demo"), signs in to Developer Hub, GitLab and Keycloak
+spec:
+  profile:
+    displayName: Demo admin
+    email: admin@demo.example.com
+  memberOf: [platform-team, ai-app-team]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Domain
+metadata:
+  name: ai-platform
+  title: AI platform
+  description: OpenShift 4.22 + OpenShift AI 3.4 platform and the applications running on it
+spec:
+  owner: platform-team

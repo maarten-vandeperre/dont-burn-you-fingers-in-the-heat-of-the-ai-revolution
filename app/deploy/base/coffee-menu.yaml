@@ -1,0 +1,136 @@
+# Menu and price API, v1 and v2 behind one Service: canary, blue-green, mirroring and chaos (mesh).
+apiVersion: v1
+kind: Service
+metadata:
+  name: coffee-menu
+  labels:
+    app: coffee-menu
+    backstage.io/kubernetes-id: coffee-menu
+    app.kubernetes.io/part-of: ai-demo
+spec:
+  selector:
+    app: coffee-menu
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coffee-menu-v1
+  labels:
+    app: coffee-menu
+    version: v1
+    app.kubernetes.io/part-of: ai-demo
+    backstage.io/kubernetes-id: coffee-menu
+    app.openshift.io/runtime: quarkus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coffee-menu
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: coffee-menu
+        version: v1
+        backstage.io/kubernetes-id: coffee-menu
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '8080'
+        prometheus.io/path: /q/metrics
+        proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+    spec:
+      serviceAccountName: coffee-menu
+      containers:
+      - name: app
+        image: coffee-menu:latest
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: OTEL_ENDPOINT
+          value: http://otel-collector.tracing-system.svc.cluster.local:4317
+        - name: APP_VERSION
+          value: v1
+        readinessProbe:
+          httpGet:
+            path: /q/health/ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /q/health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 768Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: coffee-menu-v2
+  labels:
+    app: coffee-menu
+    version: v2
+    app.kubernetes.io/part-of: ai-demo
+    backstage.io/kubernetes-id: coffee-menu
+    app.openshift.io/runtime: quarkus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: coffee-menu
+      version: v2
+  template:
+    metadata:
+      labels:
+        app: coffee-menu
+        version: v2
+        backstage.io/kubernetes-id: coffee-menu
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '8080'
+        prometheus.io/path: /q/metrics
+        proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+    spec:
+      serviceAccountName: coffee-menu
+      containers:
+      - name: app
+        image: coffee-menu:latest
+        ports:
+        - name: http
+          containerPort: 8080
+        env:
+        - name: OTEL_ENDPOINT
+          value: http://otel-collector.tracing-system.svc.cluster.local:4317
+        - name: APP_VERSION
+          value: v2
+        readinessProbe:
+          httpGet:
+            path: /q/health/ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /q/health/live
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 768Mi

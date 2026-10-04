@@ -1,0 +1,35 @@
+# Colang 1.0 flows for the coffee shop rails. The Python actions are in actions.py.
+
+# ---- input: max 200 characters ------------------------------------------------------------
+define flow check input length
+  $allowed = execute check_input_length
+  if not $allowed
+    bot refuse too long
+    stop
+
+define bot refuse too long
+  "Please keep your order under 200 characters. Short and strong, like an espresso."
+
+# ---- input and output: no cappuccino after noon -------------------------------------------
+define flow check cappuccino time
+  $verdict = execute check_cappuccino_time(source="input")
+  if $verdict == "too_late"
+    bot refuse cappuccino after noon
+    stop
+
+define flow check cappuccino output
+  $verdict = execute check_cappuccino_time(source="output")
+  if $verdict == "too_late"
+    bot refuse cappuccino after noon
+    stop
+
+define bot refuse cappuccino after noon
+  "No cappuccino after noon. You won't put pineapple on pizza either, do you? An espresso or a flat white instead?"
+
+# ---- output: max 200 characters (shortened, not blocked) ----------------------------------
+define flow limit output length
+  $bot_message = execute limit_output_length
+
+# ---- answer of the built-in rails (regex check input, self check input), in the shop's voice
+define bot refuse to respond
+  "I only talk about coffee. What can I get you? Espresso, latte, flat white, americano..."

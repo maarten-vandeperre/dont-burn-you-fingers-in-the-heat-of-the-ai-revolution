@@ -1,0 +1,33 @@
+# Red Hat OpenShift GitOps (Argo CD + Argo Rollouts). The default Argo CD instance
+# "openshift-gitops" is created by the operator. The env var makes Argo Rollouts
+# cluster scoped for the RolloutManager in namespace argo-rollouts (stack/gitops).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-gitops-operator
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-gitops-operator
+  namespace: openshift-gitops-operator
+spec:
+  upgradeStrategy: Default
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-gitops-operator
+  namespace: openshift-gitops-operator
+spec:
+  channel: latest
+  installPlanApproval: Automatic
+  name: openshift-gitops-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  config:
+    env:
+      - name: CLUSTER_SCOPED_ARGO_ROLLOUTS_NAMESPACES
+        value: argo-rollouts

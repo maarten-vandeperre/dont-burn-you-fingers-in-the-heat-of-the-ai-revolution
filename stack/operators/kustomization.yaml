@@ -1,0 +1,15 @@
+# Every operator of the platform stack (OpenShift 4.22). The observability operators
+# (Cluster Observability, Tempo, OpenTelemetry) live in observability/operators.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+commonAnnotations:
+  argocd.argoproj.io/sync-options: Delete=false
+resources:
+  - ../../operators            # Connectivity Link (Kuadrant), LeaderWorkerSet, cert-manager
+  - openshift-ai.yaml
+  - gitops.yaml
+  - pipelines.yaml
+  - servicemesh.yaml
+  - streams-for-kafka.yaml
+  - developer-hub.yaml
+  - keycloak.yaml

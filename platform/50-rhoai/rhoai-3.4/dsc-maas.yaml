@@ -1,0 +1,17 @@
+# RHOAI 3.4: MaaS lives under the kserve component
+apiVersion: datasciencecluster.opendatahub.io/v2
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+spec:
+  components:
+    kserve:
+      managementState: Managed
+      modelsAsService:
+        managementState: Managed
+    # Llama Stack operator: backs the Gen AI studio playground in 3.4
+    llamastackoperator:
+      managementState: Managed
+    # MLflow tracking server operator (instance: stack/rhoai/mlflow.yaml)
+    mlflowoperator:
+      managementState: Managed

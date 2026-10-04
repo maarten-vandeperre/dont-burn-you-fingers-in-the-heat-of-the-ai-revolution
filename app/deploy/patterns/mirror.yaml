@@ -1,0 +1,18 @@
+# Mirroring (shadow traffic): v1 answers every request, a copy goes to v2 (fire and forget,
+# responses discarded). Watch the v2 logs or Kiali.          app/demo.sh pattern mirror
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: rag-service
+  namespace: ai-demo
+spec:
+  hosts: [rag-service]
+  http:
+    - route:
+        - destination: {host: rag-service, subset: v1}
+          weight: 100
+      mirror:
+        host: rag-service
+        subset: v2
+      mirrorPercentage:
+        value: 100.0

@@ -1,0 +1,262 @@
+# OpenShift console dashboard (Observe > Dashboards). Reads user workload metrics through Thanos.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-demo-dashboard
+  namespace: openshift-config-managed
+  labels:
+    console.openshift.io/dashboard: "true"
+data:
+  ai-demo.json: |
+    {
+      "title": "AI demo: models, RAG, CDC, mesh and coffee",
+      "uid": "ai-demo",
+      "schemaVersion": 27,
+      "tags": [
+        "ai-demo"
+      ],
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "refresh": "30s",
+      "panels": [
+        {
+          "id": 1,
+          "type": "graph",
+          "title": "Model router: requests per alias / backend",
+          "gridPos": {
+            "x": 0,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": "prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "show": true
+            },
+            {
+              "format": "short",
+              "show": false
+            }
+          ],
+          "targets": [
+            {
+              "expr": "sum by (alias, backend, outcome) (rate(ai_router_requests_total{namespace=\"ai-demo\"}[5m]))",
+              "legendFormat": "{{alias}} -> {{backend}} ({{outcome}})",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "graph",
+          "title": "Model router: tokens per second",
+          "gridPos": {
+            "x": 12,
+            "y": 0,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": "prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "show": true
+            },
+            {
+              "format": "short",
+              "show": false
+            }
+          ],
+          "targets": [
+            {
+              "expr": "sum by (backend, type) (rate(ai_router_tokens_total{namespace=\"ai-demo\"}[5m]))",
+              "legendFormat": "{{backend}} {{type}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "graph",
+          "title": "RAG: p95 generation latency per model and version",
+          "gridPos": {
+            "x": 0,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": "prometheus",
+          "yaxes": [
+            {
+              "format": "s",
+              "show": true
+            },
+            {
+              "format": "short",
+              "show": false
+            }
+          ],
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, model, version) (rate(rag_generation_seconds_bucket{namespace=\"ai-demo\"}[5m])))",
+              "legendFormat": "{{model}} {{version}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "graph",
+          "title": "Mesh: requests to rag-service per version (canary / A-B / blue-green / mirror)",
+          "gridPos": {
+            "x": 12,
+            "y": 8,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": "prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "show": true
+            },
+            {
+              "format": "short",
+              "show": false
+            }
+          ],
+          "targets": [
+            {
+              "expr": "sum by (destination_version) (rate(istio_requests_total{namespace=\"ai-demo\",destination_workload=~\"rag-service-.*\",reporter=\"destination\"}[1m]))",
+              "legendFormat": "rag {{destination_version}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "graph",
+          "title": "CDC: change events projected into MongoDB",
+          "gridPos": {
+            "x": 0,
+            "y": 16,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": "prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "show": true
+            },
+            {
+              "format": "short",
+              "show": false
+            }
+          ],
+          "targets": [
+            {
+              "expr": "sum by (table, op) (rate(cdc_events_total{namespace=\"ai-demo\"}[5m]))",
+              "legendFormat": "{{table}} {{op}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "graph",
+          "title": "Mesh: denied requests (403 from AuthorizationPolicies)",
+          "gridPos": {
+            "x": 12,
+            "y": 16,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": "prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "show": true
+            },
+            {
+              "format": "short",
+              "show": false
+            }
+          ],
+          "targets": [
+            {
+              "expr": "sum by (source_workload, destination_workload) (rate(istio_requests_total{namespace=\"ai-demo\",response_code=\"403\",reporter=\"destination\"}[5m]))",
+              "legendFormat": "{{source_workload}} -> {{destination_workload}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "type": "graph",
+          "title": "Coffee: menu calls per version and response code (mesh)",
+          "gridPos": {
+            "x": 0,
+            "y": 24,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": "prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "show": true
+            },
+            {
+              "format": "short",
+              "show": false
+            }
+          ],
+          "targets": [
+            {
+              "expr": "sum by (destination_version, response_code) (rate(istio_requests_total{namespace=\"ai-demo\",destination_workload=~\"coffee-menu-.*\",reporter=\"destination\"}[1m]))",
+              "legendFormat": "menu {{destination_version}} {{response_code}}",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "type": "graph",
+          "title": "Coffee: menu lookups by source (live / cache) and order events",
+          "gridPos": {
+            "x": 12,
+            "y": 24,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": "prometheus",
+          "yaxes": [
+            {
+              "format": "short",
+              "show": true
+            },
+            {
+              "format": "short",
+              "show": false
+            }
+          ],
+          "targets": [
+            {
+              "expr": "sum by (source) (rate(coffee_menu_lookups_total{namespace=\"ai-demo\"}[5m]))",
+              "legendFormat": "menu {{source}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum by (event) (rate(coffee_orders_total{namespace=\"ai-demo\"}[5m]))",
+              "legendFormat": "orders {{event}}",
+              "refId": "B"
+            }
+          ]
+        }
+      ]
+    }

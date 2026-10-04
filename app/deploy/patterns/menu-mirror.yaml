@@ -1,0 +1,16 @@
+# Mirroring: v1 answers, v2 receives a copy of every call.   ./deploy.sh app menu mirror
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: coffee-menu
+  namespace: ai-demo
+spec:
+  hosts: [coffee-menu]
+  http:
+    - route:
+        - destination: {host: coffee-menu, subset: v1}
+      mirror:
+        host: coffee-menu
+        subset: v2
+      mirrorPercentage:
+        value: 100.0

@@ -1,0 +1,225 @@
+# LLM gateway: one canonical API in front of three providers.
+#
+#   POST /api/chat/{provider}   provider = qwen | openai | anthropic | auto
+#   POST /api/chat              same as auto
+#   GET  /api/providers         which models are configured (never shows keys)
+#
+#   request : {"prompt": "...", "system": "optional system prompt"}
+#   response: {"provider": "...", "model": "...", "answer": "...", "inputTokens": n, "outputTokens": n}
+#
+# qwen and openai speak the OpenAI chat API, anthropic its own Messages API: the provider routes
+# translate both ways with jq, so callers never see the difference.
+# auto = local Qwen behind a circuit breaker, falling back to {{llm.fallback}}.
+
+- rest:
+    id: llm-api
+    path: /api
+    get:
+      - id: get-providers
+        path: /providers
+        produces: application/json
+        to: direct:providers
+    post:
+      - id: post-chat-provider
+        path: /chat/{provider}
+        consumes: application/json
+        produces: application/json
+        to: direct:chat
+      - id: post-chat
+        path: /chat
+        consumes: application/json
+        produces: application/json
+        to: direct:chat
+
+- route:
+    id: chat
+    description: Canonical entry point, picks the provider route; errors become a JSON answer (HTTP 502)
+    from:
+      uri: direct:chat
+      steps:
+        - setVariable:
+            name: provider
+            simple: "${header.provider}"
+        - convertBodyTo:
+            type: java.lang.String
+        - setVariable:
+            name: request
+            simple: "${body}"
+        - log:
+            message: "chat request for provider ${variable.provider}"
+        - doTry:
+            steps:
+              - choice:
+                  when:
+                    - simple: "${variable.provider} == 'qwen'"
+                      steps:
+                        - to:
+                            uri: direct:qwen
+                    - simple: "${variable.provider} == 'openai'"
+                      steps:
+                        - to:
+                            uri: direct:openai
+                    - simple: "${variable.provider} == 'anthropic'"
+                      steps:
+                        - to:
+                            uri: direct:anthropic
+                  otherwise:
+                    steps:
+                      - to:
+                          uri: direct:auto
+              - convertBodyTo:
+                  type: java.lang.String
+              - removeHeaders:
+                  pattern: "*"
+            doCatch:
+              - exception:
+                  - java.lang.Exception
+                steps:
+                  - setVariable:
+                      name: error
+                      simple: "${exception.message}"
+                  - log:
+                      loggingLevel: WARN
+                      message: "provider ${variable.provider} failed: ${variable.error}"
+                  - setBody:
+                      constant: "{}"
+                  - setBody:
+                      jq:
+                        expression: '{error: variable("error"), provider: variable("provider", "auto")}'
+                  - convertBodyTo:
+                      type: java.lang.String
+                  - removeHeaders:
+                      pattern: "*"
+                  - setHeader:
+                      name: CamelHttpResponseCode
+                      constant: "502"
+        - setHeader:
+            name: Content-Type
+            constant: application/json
+
+- route:
+    id: provider-auto
+    description: Local model first, cloud fallback when it fails or is too slow
+    from:
+      uri: direct:auto
+      steps:
+        # timeout and thresholds: camel.resilience4j.* in application.properties
+        - circuitBreaker:
+            steps:
+              - to:
+                  uri: direct:qwen
+            onFallback:
+              steps:
+                - log:
+                    loggingLevel: WARN
+                    message: "local model unavailable, falling back to {{llm.fallback}}"
+                - setBody:
+                    simple: "${variable.request}"
+                - toD:
+                    uri: "direct:{{llm.fallback}}"
+
+# --- provider adapters --------------------------------------------------------------------
+
+- route:
+    id: provider-qwen
+    description: Qwen on Podman Desktop AI Lab (OpenAI compatible, local)
+    from:
+      uri: direct:qwen
+      steps:
+        - removeHeaders:
+            pattern: "*"
+        - setHeader:
+            name: Authorization
+            simple: "Bearer {{qwen.api-key}}"
+        - setHeader:
+            name: Content-Type
+            constant: application/json
+        - setBody:
+            jq:
+              expression: '{model: "{{qwen.model}}", max_tokens: {{llm.max-tokens}}, messages: [{role: "system", content: (.system // "{{llm.system-prompt}}")}, {role: "user", content: .prompt}]}'
+        - convertBodyTo:
+            type: java.lang.String
+        - to:
+            uri: "{{qwen.base-url}}/chat/completions"
+            parameters:
+              httpMethod: POST
+        - convertBodyTo:
+            type: java.lang.String
+        - setBody:
+            jq:
+              expression: '{provider: "qwen", model: (.model // "{{qwen.model}}"), answer: .choices[0].message.content, inputTokens: .usage.prompt_tokens, outputTokens: .usage.completion_tokens}'
+
+- route:
+    id: provider-openai
+    description: OpenAI chat completions
+    from:
+      uri: direct:openai
+      steps:
+        - removeHeaders:
+            pattern: "*"
+        - setHeader:
+            name: Authorization
+            simple: "Bearer {{openai.api-key}}"
+        - setHeader:
+            name: Content-Type
+            constant: application/json
+        - setBody:
+            jq:
+              expression: '{model: "{{openai.model}}", max_completion_tokens: {{llm.max-tokens}}, messages: [{role: "system", content: (.system // "{{llm.system-prompt}}")}, {role: "user", content: .prompt}]}'
+        - convertBodyTo:
+            type: java.lang.String
+        - to:
+            uri: "{{openai.base-url}}/chat/completions"
+            parameters:
+              httpMethod: POST
+        - convertBodyTo:
+            type: java.lang.String
+        - setBody:
+            jq:
+              expression: '{provider: "openai", model: .model, answer: .choices[0].message.content, inputTokens: .usage.prompt_tokens, outputTokens: .usage.completion_tokens}'
+
+- route:
+    id: provider-anthropic
+    description: Anthropic Messages API (different request and response shape)
+    from:
+      uri: direct:anthropic
+      steps:
+        - removeHeaders:
+            pattern: "*"
+        - setHeader:
+            name: x-api-key
+            simple: "{{anthropic.api-key}}"
+        - setHeader:
+            name: anthropic-version
+            constant: "2023-06-01"
+        - setHeader:
+            name: Content-Type
+            constant: application/json
+        - setBody:
+            jq:
+              expression: '{model: "{{anthropic.model}}", max_tokens: {{llm.max-tokens}}, system: (.system // "{{llm.system-prompt}}"), messages: [{role: "user", content: .prompt}]}'
+        - convertBodyTo:
+            type: java.lang.String
+        - to:
+            uri: "{{anthropic.base-url}}/messages"
+            parameters:
+              httpMethod: POST
+        - convertBodyTo:
+            type: java.lang.String
+        - setBody:
+            jq:
+              expression: '{provider: "anthropic", model: .model, answer: ([.content[] | select(.type == "text") | .text] | join("")), inputTokens: .usage.input_tokens, outputTokens: .usage.output_tokens}'
+
+- route:
+    id: providers
+    description: Configured providers and models (keys are never returned)
+    from:
+      uri: direct:providers
+      steps:
+        - setBody:
+            simple: '{"auto": "qwen, fallback {{llm.fallback}} after {{llm.local-timeout-ms}} ms", "qwen": {"url": "{{qwen.base-url}}", "model": "{{qwen.model}}"}, "openai": {"url": "{{openai.base-url}}", "model": "{{openai.model}}"}, "anthropic": {"url": "{{anthropic.base-url}}", "model": "{{anthropic.model}}"}}'
+        - removeHeaders:
+            pattern: "*"
+        - setHeader:
+            name: Content-Type
+            constant: application/json

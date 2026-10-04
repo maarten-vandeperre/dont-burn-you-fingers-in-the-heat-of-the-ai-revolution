@@ -1,0 +1,12 @@
+# oc apply -k deploy/   then   oc start-build ${{ values.name }} -n ${{ values.name }} --follow
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ${{ values.name }}
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: ${{ values.name }}
+    includeSelectors: false
+resources:
+  - namespace.yaml
+  - build.yaml
+  - deployment.yaml

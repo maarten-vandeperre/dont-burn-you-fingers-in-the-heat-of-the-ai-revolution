@@ -1,0 +1,15 @@
+# Blue-green: green (v2) is live. Roll back with: app/demo.sh pattern blue
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: rag-service
+  namespace: ai-demo
+spec:
+  hosts: [rag-service]
+  http:
+    - route:
+        - destination: {host: rag-service, subset: v2}
+      headers:
+        response:
+          set:
+            x-deployment-color: green

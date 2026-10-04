@@ -1,0 +1,40 @@
+# Prometheus of the OpenShift AI monitoring stack may discover and scrape pods in all
+# namespaces (vLLM metrics in maas-models).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus-rhoai-scrape
+rules:
+  - apiGroups: [""]
+    resources: [pods, endpoints, services, nodes, nodes/metrics]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-rhoai-cluster-reader
+subjects:
+  - kind: ServiceAccount
+    name: data-science-monitoringstack-prometheus
+    namespace: redhat-ods-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus-rhoai-scrape
+---
+# Perses (service account "default" in redhat-ods-monitoring) may read platform metrics via Thanos.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: perses-cluster-monitoring-view
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: redhat-ods-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view

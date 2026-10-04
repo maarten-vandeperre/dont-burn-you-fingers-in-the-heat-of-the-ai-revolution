@@ -1,0 +1,88 @@
+# Two identities for Developer Hub:
+#   rhdh-kubernetes        read-only, cluster wide: Kubernetes, Topology and Tekton views
+#   rhdh-platform-actions  narrow write access used by the software templates (through the
+#                          /platform-actions proxy): traffic patterns, rollouts, scaling.
+#                          Its Roles live next to the resources (app/deploy/base, models/base).
+# Long-lived tokens are read by deploy.sh into the rhdh-secrets Secret.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rhdh-kubernetes
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rhdh-kubernetes-token
+  annotations:
+    kubernetes.io/service-account.name: rhdh-kubernetes
+type: kubernetes.io/service-account-token
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rhdh-platform-actions
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rhdh-platform-actions-token
+  annotations:
+    kubernetes.io/service-account.name: rhdh-platform-actions
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rhdh-kubernetes-view
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+  - kind: ServiceAccount
+    name: rhdh-kubernetes
+    namespace: rhdh
+---
+# what "view" does not cover: pod logs (Topology, Tekton), and the CRDs shown in the catalog
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rhdh-kubernetes-extra-read
+rules:
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get, list, watch]
+  - apiGroups: [tekton.dev]
+    resources: [pipelineruns, taskruns, pipelines, tasks]
+    verbs: [get, list, watch]
+  - apiGroups: [route.openshift.io]
+    resources: [routes]
+    verbs: [get, list, watch]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts, applications]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.istio.io, security.istio.io]
+    resources: ["*"]
+    verbs: [get, list, watch]
+  - apiGroups: [kafka.strimzi.io]
+    resources: ["*"]
+    verbs: [get, list, watch]
+  - apiGroups: [serving.kserve.io, maas.opendatahub.io]
+    resources: ["*"]
+    verbs: [get, list, watch]
+  - apiGroups: [metrics.k8s.io]
+    resources: [pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rhdh-kubernetes-extra-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rhdh-kubernetes-extra-read
+subjects:
+  - kind: ServiceAccount
+    name: rhdh-kubernetes
+    namespace: rhdh

@@ -1,0 +1,35 @@
+# In-cluster build from the GitLab repository (Dockerfile strategy).
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ${{ values.name }}
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ${{ values.name }}
+  labels:
+    backstage.io/kubernetes-id: ${{ values.name }}
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://${{ values.gitlabHost }}/ai-platform/${{ values.name }}.git
+      ref: main
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+      env:
+        - name: GIT_SSL_NO_VERIFY
+          value: "true"
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ${{ values.name }}:latest
+  resources:
+    limits:
+      memory: 3Gi

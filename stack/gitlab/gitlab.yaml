@@ -1,0 +1,171 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitlab-omnibus
+data:
+  # Ruby, evaluated by Omnibus at start. Everything cluster specific comes from env vars.
+  # TLS ends at the OpenShift router; GitLab itself serves plain HTTP on port 80.
+  omnibus.rb: |
+    external_url ENV['GITLAB_EXTERNAL_URL']
+    nginx['listen_port'] = 80
+    nginx['listen_https'] = false
+    nginx['proxy_set_headers'] = { 'X-Forwarded-Proto' => 'https', 'X-Forwarded-Ssl' => 'on' }
+    letsencrypt['enable'] = false
+    gitlab_rails['initial_root_password'] = ENV['GITLAB_ROOT_PASSWORD']
+    gitlab_rails['display_initial_root_password'] = false
+    gitlab_rails['gitlab_signup_enabled'] = false
+    # keep the footprint demo sized
+    prometheus_monitoring['enable'] = false
+    puma['worker_processes'] = 2
+    sidekiq['concurrency'] = 10
+    # single sign-on with Keycloak (realm "demo")
+    gitlab_rails['omniauth_enabled'] = true
+    gitlab_rails['omniauth_allow_single_sign_on'] = ['openid_connect']
+    gitlab_rails['omniauth_block_auto_created_users'] = false
+    gitlab_rails['omniauth_auto_link_user'] = ['openid_connect']
+    gitlab_rails['omniauth_providers'] = [
+      {
+        name: 'openid_connect',
+        label: 'Keycloak',
+        args: {
+          name: 'openid_connect',
+          scope: ['openid', 'profile', 'email'],
+          response_type: 'code',
+          issuer: ENV['KEYCLOAK_ISSUER'],
+          discovery: true,
+          client_auth_method: 'query',
+          uid_field: 'preferred_username',
+          pkce: true,
+          client_options: {
+            identifier: 'gitlab',
+            secret: ENV['GITLAB_OIDC_SECRET'],
+            redirect_uri: ENV['GITLAB_EXTERNAL_URL'] + '/users/auth/openid_connect/callback'
+          }
+        }
+      }
+    ]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitlab-config
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitlab-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab
+  labels:
+    app: gitlab
+spec:
+  selector:
+    app: gitlab
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: gitlab
+spec:
+  host: REPLACED-BY-KUSTOMIZE
+  to:
+    kind: Service
+    name: gitlab
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitlab
+  labels:
+    app: gitlab
+    app.kubernetes.io/part-of: platform-tools
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: gitlab
+  template:
+    metadata:
+      labels:
+        app: gitlab
+    spec:
+      serviceAccountName: gitlab
+      containers:
+        - name: gitlab
+          # Pin a version (e.g. gitlab/gitlab-ce:<x.y.z>-ce.0) for long-lived demos
+          image: docker.io/gitlab/gitlab-ce:latest
+          env:
+            - name: GITLAB_OMNIBUS_CONFIG
+              value: from_file('/etc/gitlab-omnibus/omnibus.rb')
+            - name: GITLAB_EXTERNAL_URL
+              valueFrom:
+                configMapKeyRef: {name: gitlab-cluster-params, key: GITLAB_EXTERNAL_URL}
+            - name: KEYCLOAK_ISSUER
+              valueFrom:
+                configMapKeyRef: {name: gitlab-cluster-params, key: KEYCLOAK_ISSUER}
+            - name: GITLAB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: gitlab-secrets, key: root-password}
+            - name: GITLAB_OIDC_SECRET
+              valueFrom:
+                secretKeyRef: {name: gitlab-secrets, key: oidc-client-secret}
+          ports:
+            - containerPort: 80
+              name: http
+          startupProbe:
+            httpGet: {path: /users/sign_in, port: 80}
+            periodSeconds: 15
+            failureThreshold: 80          # first start: up to 20 min (database migrations)
+          readinessProbe:
+            httpGet: {path: /users/sign_in, port: 80}
+            periodSeconds: 15
+            timeoutSeconds: 10
+          livenessProbe:
+            httpGet: {path: /users/sign_in, port: 80}
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 10
+          resources:
+            requests: {cpu: "1", memory: 4Gi}
+            limits: {cpu: "4", memory: 8Gi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/gitlab}
+            - {name: data, mountPath: /var/opt/gitlab}
+            - {name: logs, mountPath: /var/log/gitlab}
+            - {name: omnibus, mountPath: /etc/gitlab-omnibus}
+            - {name: shm, mountPath: /dev/shm}
+      volumes:
+        - name: config
+          persistentVolumeClaim: {claimName: gitlab-config}
+        - name: data
+          persistentVolumeClaim: {claimName: gitlab-data}
+        - name: logs
+          emptyDir: {}
+        - name: omnibus
+          configMap: {name: gitlab-omnibus}
+        - name: shm
+          emptyDir: {medium: Memory, sizeLimit: 256Mi}

@@ -1,0 +1,29 @@
+# The default Prometheus datasource of the dashboards: platform Thanos Querier.
+# Red Hat documented approach (COO Perses UI plugin, "create global Thanos Querier datasource").
+apiVersion: perses.dev/v1alpha2
+kind: PersesGlobalDatasource
+metadata:
+  name: thanos-querier-global-datasource
+spec:
+  config:
+    display:
+      name: "Platform Thanos Querier"
+    default: true
+    plugin:
+      kind: "PrometheusDatasource"
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
+            secret: thanos-querier-global-datasource-secret
+  client:
+    kubernetesAuth:
+      enable: true
+    tls:
+      enable: true
+      caCert:
+        type: file
+        # WORKAROUND (COO 1.5): /ca/service-ca.crt from the docs is not mounted in the Perses pod;
+        # the service account projection carries the service CA on OpenShift.
+        certPath: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt

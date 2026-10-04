@@ -1,0 +1,5 @@
+config/llm.env
+data/outbox/*
+data/inbox/**/.done/
+!data/outbox/.gitkeep
+.camel-jbang/

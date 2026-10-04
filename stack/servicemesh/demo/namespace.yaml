@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mesh-demo
+  labels:
+    istio-discovery: enabled     # part of the mesh (discoverySelectors)
+    istio-injection: enabled     # sidecars from the "default" revision

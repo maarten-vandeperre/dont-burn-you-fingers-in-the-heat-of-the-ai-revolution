@@ -1,0 +1,170 @@
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: ai-demo
+  title: AI demo applications
+  description: RAG with LangChain4j and Camel, mesh security and deployment patterns, CDC to MongoDB
+  links:
+    - {url: "https://ai-demo-ai-demo.apps.CHANGE-ME.example.com", title: Demo UI, icon: dashboard}
+    - {url: "https://coffee-ai-demo.apps.CHANGE-ME.example.com", title: Coffee shop, icon: dashboard}
+    - {url: "https://gitlab-gitlab.apps.CHANGE-ME.example.com/ai-platform/platform/-/tree/main/app", title: Source (GitLab)}
+    - {url: "https://kiali-istio-system.apps.CHANGE-ME.example.com/console/graph/namespaces/?namespaces=ai-demo&graphType=versionedApp", title: Kiali graph}
+    - {url: "https://console-openshift-console.apps.CHANGE-ME.example.com/monitoring/dashboards", title: "Dashboard: AI demo"}
+spec:
+  owner: ai-app-team
+  domain: ai-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: frontend
+  title: frontend (BFF + React UI)
+  description: Quarkus backend-for-frontend serving the React / Vite / Tailwind UI
+  annotations:
+    backstage.io/kubernetes-id: frontend
+    backstage.io/kubernetes-namespace: ai-demo
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.CHANGE-ME.example.com/ai-platform/platform/-/tree/main/app/frontend/
+    tekton.dev/cicd: "true"
+    argocd/app-name: ai-demo
+  links:
+    - {url: "https://ai-demo-ai-demo.apps.CHANGE-ME.example.com", title: Open the UI, icon: dashboard}
+  tags: [quarkus, java25, react, vite, tailwind]
+spec:
+  type: website
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  providesApis: [frontend-api]
+  consumesApis: [rag-api, orders-api, customer-views-api]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: rag-service
+  title: rag-service (v1 + v2)
+  description: Retrieval augmented generation with LangChain4j; v1 and v2 for the mesh deployment patterns
+  annotations:
+    backstage.io/kubernetes-id: rag-service
+    backstage.io/kubernetes-namespace: ai-demo
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.CHANGE-ME.example.com/ai-platform/platform/-/tree/main/app/rag-service/
+    tekton.dev/cicd: "true"
+    argocd/app-name: ai-demo
+  links:
+    - {url: "https://kiali-istio-system.apps.CHANGE-ME.example.com/console/namespaces/ai-demo/services/rag-service", title: Kiali service}
+  tags: [quarkus, langchain4j, rag]
+spec:
+  type: service
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  providesApis: [rag-api]
+  consumesApis: [model-router-api]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: model-router
+  title: model-router (Apache Camel)
+  description: OpenAI-compatible model abstraction, aliases gemma / qwen / openai / auto with circuit breaker
+  annotations:
+    backstage.io/kubernetes-id: model-router
+    backstage.io/kubernetes-namespace: ai-demo
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.CHANGE-ME.example.com/ai-platform/platform/-/tree/main/app/model-router/
+    tekton.dev/cicd: "true"
+    argocd/app-name: ai-demo
+  tags: [quarkus, camel, ai-gateway]
+spec:
+  type: service
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  providesApis: [model-router-api]
+  dependsOn: [resource:gemma-3-270m-it, resource:qwen3-0-6b, resource:openai]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: orders-service
+  title: orders-service
+  description: Writes customers and orders to PostgreSQL (the Debezium source)
+  annotations:
+    backstage.io/kubernetes-id: orders-service
+    backstage.io/kubernetes-namespace: ai-demo
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.CHANGE-ME.example.com/ai-platform/platform/-/tree/main/app/orders-service/
+    tekton.dev/cicd: "true"
+    argocd/app-name: ai-demo
+  tags: [quarkus, panache, postgresql]
+spec:
+  type: service
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  providesApis: [orders-api]
+  dependsOn: [resource:inventory-db]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: projection-service
+  title: projection-service
+  description: Debezium events from Kafka into a formatted MongoDB read model (CQRS)
+  annotations:
+    backstage.io/kubernetes-id: projection-service
+    backstage.io/kubernetes-namespace: ai-demo
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.CHANGE-ME.example.com/ai-platform/platform/-/tree/main/app/projection-service/
+    tekton.dev/cicd: "true"
+    argocd/app-name: ai-demo
+  tags: [quarkus, kafka, debezium, mongodb]
+spec:
+  type: service
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  providesApis: [customer-views-api, coffee-audit-api]
+  dependsOn: [resource:kafka-platform, resource:debezium-inventory-connector, resource:mongodb]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: coffee-shop
+  title: coffee-shop (Platform Coffee)
+  description: Coffee ordering in natural language (LangChain4j via the model router), orders in PostgreSQL, audit trail from MongoDB
+  annotations:
+    backstage.io/kubernetes-id: coffee-shop
+    backstage.io/kubernetes-namespace: ai-demo
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.CHANGE-ME.example.com/ai-platform/platform/-/tree/main/app/coffee-shop/
+    tekton.dev/cicd: "true"
+    argocd/app-name: ai-demo
+  links:
+    - {url: "https://coffee-ai-demo.apps.CHANGE-ME.example.com", title: Open the coffee shop, icon: dashboard}
+  tags: [quarkus, java25, langchain4j, react, debezium]
+spec:
+  type: website
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  providesApis: [coffee-shop-api]
+  consumesApis: [coffee-menu-api, model-router-api, coffee-audit-api]
+  dependsOn: [resource:inventory-db]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: coffee-menu
+  title: coffee-menu (v1 + v2)
+  description: Menu and price API; target of canary, blue-green, mirroring and chaos experiments in the mesh
+  annotations:
+    backstage.io/kubernetes-id: coffee-menu
+    backstage.io/kubernetes-namespace: ai-demo
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.CHANGE-ME.example.com/ai-platform/platform/-/tree/main/app/coffee-menu/
+    tekton.dev/cicd: "true"
+    argocd/app-name: ai-demo
+  links:
+    - {url: "https://kiali-istio-system.apps.CHANGE-ME.example.com/console/namespaces/ai-demo/services/coffee-menu", title: Kiali service}
+  tags: [quarkus, service-mesh, chaos]
+spec:
+  type: service
+  lifecycle: experimental
+  owner: ai-app-team
+  system: ai-demo
+  providesApis: [coffee-menu-api]

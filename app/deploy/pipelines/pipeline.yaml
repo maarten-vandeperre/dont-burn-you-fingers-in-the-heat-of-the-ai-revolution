@@ -1,0 +1,74 @@
+# git clone -> buildah (Dockerfile in app/) -> push to the internal registry -> restart the service.
+# Uses the tasks OpenShift Pipelines ships in namespace openshift-pipelines (cluster resolver).
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: build-service
+spec:
+  params:
+    - name: git-url
+      type: string
+    - name: git-revision
+      type: string
+      default: main
+    - name: context
+      type: string
+      default: app
+      description: folder of the Gradle multi-project inside the repository
+    - name: service
+      type: string
+      description: frontend | rag-service | model-router | orders-service | projection-service
+    - name: dockerfile
+      type: string
+      default: Dockerfile
+      description: Dockerfile for backends, <service>/Dockerfile for frontend and coffee-shop
+    - name: ssl-verify
+      type: string
+      default: "true"
+      description: '"false" for the demo GitLab behind a self-signed route certificate'
+  workspaces:
+    - name: source
+  tasks:
+    - name: clone
+      taskRef:
+        resolver: cluster
+        params:
+          - {name: kind, value: task}
+          - {name: name, value: git-clone}
+          - {name: namespace, value: openshift-pipelines}
+      params:
+        - {name: URL, value: $(params.git-url)}
+        - {name: REVISION, value: $(params.git-revision)}
+        - {name: SSL_VERIFY, value: $(params.ssl-verify)}
+      workspaces:
+        - {name: output, workspace: source}
+    - name: build
+      runAfter: [clone]
+      taskRef:
+        resolver: cluster
+        params:
+          - {name: kind, value: task}
+          - {name: name, value: buildah}
+          - {name: namespace, value: openshift-pipelines}
+      params:
+        - name: IMAGE
+          value: image-registry.openshift-image-registry.svc:5000/$(context.pipelineRun.namespace)/$(params.service):latest
+        - name: CONTEXT
+          value: $(params.context)
+        - name: DOCKERFILE
+          value: $(params.context)/$(params.dockerfile)
+        - name: BUILD_ARGS
+          value: ["SERVICE=$(params.service)"]
+      workspaces:
+        - {name: source, workspace: source}
+    - name: rollout
+      runAfter: [build]
+      taskRef:
+        resolver: cluster
+        params:
+          - {name: kind, value: task}
+          - {name: name, value: openshift-client}
+          - {name: namespace, value: openshift-pipelines}
+      params:
+        - name: SCRIPT
+          value: oc rollout restart deployment -l app=$(params.service) -n $(context.pipelineRun.namespace)

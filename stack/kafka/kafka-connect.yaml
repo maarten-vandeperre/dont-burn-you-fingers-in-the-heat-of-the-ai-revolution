@@ -1,0 +1,66 @@
+# Kafka Connect with the Red Hat build of Debezium PostgreSQL connector. Streams for Apache Kafka
+# builds the image (OpenShift Build -> ImageStream) from the Red Hat Maven repository.
+# To upgrade Debezium, change the version in the artifact URL.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: debezium-connect
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaConnect
+metadata:
+  name: debezium
+  annotations:
+    strimzi.io/use-connector-resources: "true"
+spec:
+  replicas: 1
+  bootstrapServers: platform-kafka-bootstrap:9092
+  config:
+    group.id: debezium-connect
+    offset.storage.topic: debezium-connect-offsets
+    config.storage.topic: debezium-connect-configs
+    status.storage.topic: debezium-connect-status
+    config.storage.replication.factor: 1
+    offset.storage.replication.factor: 1
+    status.storage.replication.factor: 1
+    # lets connectors read credentials from Kubernetes Secrets: ${secrets:<ns>/<secret>:<key>}
+    config.providers: secrets
+    config.providers.secrets.class: io.strimzi.kafka.KubernetesSecretConfigProvider
+  build:
+    output:
+      type: imagestream
+      image: debezium-connect:latest
+    plugins:
+      - name: debezium-connector-postgres
+        artifacts:
+          - type: zip
+            url: https://maven.repository.redhat.com/ga/io/debezium/debezium-connector-postgres/3.2.5.Final-redhat-00001/debezium-connector-postgres-3.2.5.Final-redhat-00001-plugin.zip
+  resources:
+    requests: {cpu: 250m, memory: 1Gi}
+    limits: {cpu: "1", memory: 2Gi}
+---
+# Kafka Connect may read the inventory-db Secret (for the config provider above)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: connect-read-inventory-db
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [inventory-db]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: connect-read-inventory-db
+subjects:
+  - kind: ServiceAccount
+    name: debezium-connect
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: connect-read-inventory-db

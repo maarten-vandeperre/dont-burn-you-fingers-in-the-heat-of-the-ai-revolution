@@ -1,0 +1,38 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: scale-demo-service
+  title: "Scale a demo service"
+  description: Set the replicas of a Deployment in ai-demo (0 stops it; try mongodb or projection-service)
+  tags: [kubernetes, scaling]
+spec:
+  owner: platform-team
+  type: platform-action
+  parameters:
+    - title: Deployment
+      required: [deployment, replicas]
+      properties:
+        deployment:
+          title: Deployment
+          type: string
+          enum: [frontend, rag-service-v1, rag-service-v2, model-router, orders-service, projection-service, mongodb, coffee-shop, coffee-menu-v1, coffee-menu-v2]
+        replicas:
+          title: Replicas
+          type: integer
+          default: 2
+          minimum: 0
+          maximum: 5
+  steps:
+    - id: scale
+      name: Scale
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/apps/v1/namespaces/ai-demo/deployments/${{ parameters.deployment }}/scale
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"replicas":${{ parameters.replicas }}}}'
+  output:
+    links:
+      - title: ai-demo system
+        entityRef: system:default/ai-demo

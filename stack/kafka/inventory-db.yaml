@@ -1,0 +1,129 @@
+# Demo source database for Debezium: PostgreSQL with logical decoding and a small
+# "inventory" schema that is (re)seeded idempotently on every start.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inventory-db-config
+data:
+  # picked up by the RHEL PostgreSQL image from /opt/app-root/src/postgresql-cfg/
+  cdc.conf: |
+    wal_level = logical
+    max_wal_senders = 4
+    max_replication_slots = 4
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inventory-db-init
+data:
+  # executed by the image after every start from /opt/app-root/src/postgresql-start/
+  seed.sh: |
+    #!/bin/bash
+    psql -v ON_ERROR_STOP=1 -d "$POSTGRESQL_DATABASE" <<'SQL'
+    CREATE SCHEMA IF NOT EXISTS inventory;
+    CREATE TABLE IF NOT EXISTS inventory.customers (
+      id SERIAL PRIMARY KEY, first_name TEXT NOT NULL, last_name TEXT NOT NULL, email TEXT UNIQUE NOT NULL);
+    CREATE TABLE IF NOT EXISTS inventory.orders (
+      id SERIAL PRIMARY KEY, customer_id INT REFERENCES inventory.customers(id),
+      product TEXT NOT NULL, quantity INT NOT NULL, created_at TIMESTAMPTZ DEFAULT now());
+    INSERT INTO inventory.customers (first_name, last_name, email) VALUES
+      ('Ada', 'Lovelace', 'ada@example.com'), ('Grace', 'Hopper', 'grace@example.com'),
+      ('Linus', 'Torvalds', 'linus@example.com')
+    ON CONFLICT (email) DO NOTHING;
+    -- coffee shop (app/coffee-shop); REPLICA IDENTITY FULL so deletes carry the whole row
+    CREATE SCHEMA IF NOT EXISTS coffee;
+    CREATE TABLE IF NOT EXISTS coffee.orders (
+      id BIGSERIAL PRIMARY KEY, status TEXT NOT NULL, total_cents INT NOT NULL, cups INT NOT NULL,
+      model_alias TEXT, menu_version TEXT, order_text VARCHAR(500),
+      created_at TIMESTAMPTZ DEFAULT now(), updated_at TIMESTAMPTZ DEFAULT now());
+    CREATE TABLE IF NOT EXISTS coffee.order_lines (
+      id BIGSERIAL PRIMARY KEY, order_id BIGINT NOT NULL REFERENCES coffee.orders(id) ON DELETE CASCADE,
+      drink TEXT NOT NULL, size TEXT NOT NULL, milk TEXT NOT NULL, decaf BOOLEAN NOT NULL,
+      quantity INT NOT NULL, unit_cents INT NOT NULL, total_cents INT NOT NULL);
+    ALTER TABLE coffee.orders REPLICA IDENTITY FULL;
+    ALTER TABLE coffee.order_lines REPLICA IDENTITY FULL;
+    SQL
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: inventory-db-data
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inventory-db
+spec:
+  selector:
+    app: inventory-db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-db
+  labels:
+    app: inventory-db
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: inventory-db
+  template:
+    metadata:
+      labels:
+        app: inventory-db
+    spec:
+      containers:
+        - name: postgres
+          image: registry.redhat.io/rhel9/postgresql-16@sha256:3943bfa5de044d8f033df148c0409ed826171b779f3cf3ddf537a1914960ab57
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRESQL_DATABASE
+              value: inventory
+            - name: POSTGRESQL_USER
+              value: inventory
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: inventory-db, key: user-password}
+            # enables the "postgres" superuser, used by Debezium (replication + publication)
+            - name: POSTGRESQL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: inventory-db, key: admin-password}
+          readinessProbe:
+            exec:
+              command: ["/usr/libexec/check-container"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/pgsql/data
+            - name: config
+              mountPath: /opt/app-root/src/postgresql-cfg
+            - name: init
+              mountPath: /opt/app-root/src/postgresql-start
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: inventory-db-data
+        - name: config
+          configMap:
+            name: inventory-db-config
+        - name: init
+          configMap:
+            name: inventory-db-init
+            defaultMode: 0755

@@ -1,0 +1,60 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: model-router-rollout
+  title: "Argo Rollouts: release the model-router"
+  description: Start, abort or retry the mesh-driven canary of the model-router (20% -> 50% -> 100%)
+  tags: [argo-rollouts, canary, service-mesh]
+spec:
+  owner: platform-team
+  type: platform-action
+  parameters:
+    - title: Rollout
+      required: [action]
+      properties:
+        action:
+          title: Action
+          type: string
+          default: start
+          enum: [start, abort, retry]
+          enumNames: ["Start a new canary release", "Abort (back to stable)", "Retry an aborted release"]
+        release:
+          title: Release label
+          type: string
+          default: demo-1
+          ui:help: Any new value starts a new revision (written as pod annotation demo/release)
+  steps:
+    - id: start
+      if: ${{ parameters.action === 'start' }}
+      name: New revision
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/argoproj.io/v1alpha1/namespaces/ai-demo/rollouts/model-router
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"spec":{"template":{"metadata":{"annotations":{"demo/release":"${{ parameters.release }}"}}}}}'
+    - id: abort
+      if: ${{ parameters.action === 'abort' }}
+      name: Abort
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/argoproj.io/v1alpha1/namespaces/ai-demo/rollouts/model-router/status
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"status":{"abort":true}}'
+    - id: retry
+      if: ${{ parameters.action === 'retry' }}
+      name: Retry
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/argoproj.io/v1alpha1/namespaces/ai-demo/rollouts/model-router/status
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"status":{"abort":false}}'
+  output:
+    links:
+      - title: model-router (Kubernetes tab shows the Rollout and the VirtualService weights)
+        entityRef: component:default/model-router

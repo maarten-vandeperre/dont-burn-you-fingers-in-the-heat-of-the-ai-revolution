@@ -1,0 +1,15 @@
+# Canary: 90% v1, 10% v2. Raise the v2 weight while error rate and latency stay fine.
+#   app/demo.sh pattern canary [weight]   (default 10)
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: rag-service
+  namespace: ai-demo
+spec:
+  hosts: [rag-service]
+  http:
+    - route:
+        - destination: {host: rag-service, subset: v1}
+          weight: 90
+        - destination: {host: rag-service, subset: v2}
+          weight: 10

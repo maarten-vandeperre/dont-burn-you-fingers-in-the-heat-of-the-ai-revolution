@@ -1,0 +1,34 @@
+apiVersion: sailoperator.io/v1
+kind: IstioCNI
+metadata:
+  name: default
+spec:
+  namespace: istio-cni
+---
+apiVersion: sailoperator.io/v1
+kind: Istio
+metadata:
+  name: default
+spec:
+  namespace: istio-system
+  updateStrategy:
+    type: InPlace
+  values:
+    sidecarInjectorWebhook:
+      # OpenShift build pods never get a sidecar. Binary builds (oc start-build --from-archive)
+      # stream the source into the build pod; with a proxy container in it the builder receives
+      # nothing ("unable to extract binary build input"). Build pods carry openshift.io/build.name.
+      neverInjectSelector:
+        - matchExpressions:
+            - key: openshift.io/build.name
+              operator: Exists
+    meshConfig:
+      # only namespaces with this label belong to the mesh
+      discoverySelectors:
+        - matchLabels:
+            istio-discovery: enabled
+      extensionProviders:
+        - name: otel-tracing
+          opentelemetry:
+            service: otel-collector.tracing-system.svc.cluster.local
+            port: 4317

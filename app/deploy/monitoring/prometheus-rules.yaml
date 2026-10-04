@@ -1,0 +1,37 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ai-demo-alerts
+  namespace: ai-demo
+spec:
+  groups:
+    - name: ai-demo
+      rules:
+        - alert: ModelRouterFallingBackToOpenAI
+          expr: sum(increase(ai_router_fallbacks_total[10m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: The local model is failing or too slow, "auto" requests are served by OpenAI.
+        - alert: ModelRouterErrors
+          expr: sum(rate(ai_router_requests_total{outcome="error"}[5m])) / sum(rate(ai_router_requests_total[5m])) > 0.2
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than 20% of model calls fail.
+        - alert: RagSlowAnswers
+          expr: histogram_quantile(0.95, sum by (le) (rate(rag_generation_seconds_bucket[10m]))) > 60
+          for: 10m
+          labels:
+            severity: info
+          annotations:
+            summary: p95 answer generation above 60 s (CPU models under load?).
+        - alert: CdcProjectionLagging
+          expr: max(cdc_lag_ms_max) > 30000
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: MongoDB projection is more than 30 s behind PostgreSQL.

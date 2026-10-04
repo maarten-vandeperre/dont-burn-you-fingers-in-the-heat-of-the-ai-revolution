@@ -1,0 +1,20 @@
+# Lean DataScienceCluster for OpenShift AI 3.5+. ogx (playground) is left out on purpose,
+# see README "Gen AI playground". Created only when no default-dsc exists yet.
+apiVersion: datasciencecluster.opendatahub.io/v2
+kind: DataScienceCluster
+metadata:
+  name: default-dsc
+spec:
+  components:
+    dashboard:
+      managementState: Managed
+    workbenches:
+      managementState: Managed
+      workbenchNamespace: rhods-notebooks
+    kserve:
+      managementState: Managed
+      rawDeploymentServiceConfig: Headed
+    aigateway:
+      managementState: Managed
+      modelsAsAService:
+        managementState: Managed

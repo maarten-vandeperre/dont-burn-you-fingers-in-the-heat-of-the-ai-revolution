@@ -1,0 +1,12 @@
+# Baseline: all traffic to v1.          app/demo.sh pattern reset
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: rag-service
+  namespace: ai-demo
+spec:
+  hosts: [rag-service]
+  http:
+    - route:
+        - destination: {host: rag-service, subset: v1}
+          weight: 100

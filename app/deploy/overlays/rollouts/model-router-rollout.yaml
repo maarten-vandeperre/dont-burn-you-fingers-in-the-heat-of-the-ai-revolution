@@ -1,0 +1,106 @@
+# Argo Rollouts canary for the model-router, traffic shifted by the service mesh
+# (VirtualService weights between the stable and canary subsets of the same Service).
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: model-router
+  namespace: ai-demo
+  labels:
+    app: model-router
+    backstage.io/kubernetes-id: model-router
+    app.kubernetes.io/part-of: ai-demo
+    app.openshift.io/runtime: quarkus
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: model-router
+  strategy:
+    canary:
+      trafficRouting:
+        istio:
+          virtualService:
+            name: model-router
+            routes: [primary]
+          destinationRule:
+            name: model-router
+            canarySubsetName: canary
+            stableSubsetName: stable
+      steps:
+        - setWeight: 20
+        - pause: {duration: 60s}
+        - setWeight: 50
+        - pause: {duration: 60s}
+        - setWeight: 100
+  template:
+    metadata:
+      labels:
+        app: model-router
+        version: v1
+        backstage.io/kubernetes-id: model-router
+      annotations:
+        # app metrics are merged into the sidecar's metrics endpoint (scraped by the PodMonitor)
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /q/metrics
+        proxy.istio.io/config: '{"holdApplicationUntilProxyStarts": true}'
+    spec:
+      serviceAccountName: model-router
+      containers:
+        - name: app
+          image: model-router:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: OTEL_ENDPOINT
+              value: http://otel-collector.tracing-system.svc.cluster.local:4317
+            - name: MAAS_API_KEY
+              valueFrom: {secretKeyRef: {name: model-router-secrets, key: MAAS_API_KEY}}
+            - name: OPENAI_API_KEY
+              valueFrom: {secretKeyRef: {name: model-router-secrets, key: OPENAI_API_KEY, optional: true}}
+          envFrom:
+            - configMapRef:
+                name: ai-demo-config
+          readinessProbe:
+            httpGet: {path: /q/health/ready, port: 8080}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /q/health/live, port: 8080}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 768Mi}
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: model-router
+  namespace: ai-demo
+spec:
+  host: model-router
+  subsets:
+    - name: stable
+      labels:
+        app: model-router
+    - name: canary
+      labels:
+        app: model-router
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: model-router
+  namespace: ai-demo
+spec:
+  hosts: [model-router]
+  http:
+    - name: primary
+      route:
+        - destination: {host: model-router, subset: stable}
+          weight: 100
+        - destination: {host: model-router, subset: canary}
+          weight: 0

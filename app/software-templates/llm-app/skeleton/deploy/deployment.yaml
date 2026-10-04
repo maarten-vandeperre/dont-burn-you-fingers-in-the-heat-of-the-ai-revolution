@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${{ values.name }}
+  labels:
+    app: ${{ values.name }}
+    backstage.io/kubernetes-id: ${{ values.name }}
+    app.openshift.io/runtime: quarkus
+  annotations:
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"${{ values.name }}:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"app\")].image"}]'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${{ values.name }}
+  template:
+    metadata:
+      labels:
+        app: ${{ values.name }}
+        backstage.io/kubernetes-id: ${{ values.name }}
+    spec:
+      containers:
+        - name: app
+          image: ${{ values.name }}:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - secretRef:
+                name: llm-credentials     # LLM_API_KEY (and optionally LLM_BASE_URL / LLM_MODEL)
+                optional: true
+          readinessProbe:
+            httpGet: {path: /q/health/ready, port: 8080}
+          livenessProbe:
+            httpGet: {path: /q/health/live, port: 8080}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${{ values.name }}
+  labels:
+    app: ${{ values.name }}
+    backstage.io/kubernetes-id: ${{ values.name }}
+spec:
+  selector:
+    app: ${{ values.name }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ${{ values.name }}
+  labels:
+    backstage.io/kubernetes-id: ${{ values.name }}
+spec:
+  to:
+    kind: Service
+    name: ${{ values.name }}
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

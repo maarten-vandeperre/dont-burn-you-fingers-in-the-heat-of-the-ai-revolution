@@ -1,0 +1,24 @@
+# Developer Hub template "Models-as-a-Service: scale a model" may change the replicas of the models.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rhdh-platform-actions
+  namespace: maas-models
+rules:
+  - apiGroups: [serving.kserve.io]
+    resources: [llminferenceservices]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rhdh-platform-actions
+  namespace: maas-models
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rhdh-platform-actions
+subjects:
+  - kind: ServiceAccount
+    name: rhdh-platform-actions
+    namespace: rhdh

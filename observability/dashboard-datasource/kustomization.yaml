@@ -1,0 +1,17 @@
+# Data for the OpenShift AI observability dashboard (Observe & monitor > Dashboard: Cluster,
+# Models, Usage). Without these the dashboard shows "No datasource found for kind
+# 'PrometheusDatasource' and name 'undefined'".
+#
+# Workarounds for COO 1.5.x on OpenShift AI 3.4.x, taken from davidseve/rhoai-platform-ops
+# (validated on RHOAI 3.4.4 / COO 1.5.2 / OCP 4.22). Remove them when COO 1.6+ / RHOAI 3.5
+# fix the underlying bugs (see the comment in each file).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+commonAnnotations:
+  argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+resources:
+  - perses-global-datasource.yaml
+  - networkpolicies.yaml
+  - prometheus-web-tls-ca.yaml
+  - rbac.yaml
+  - perses-auth-fix.yaml

@@ -1,0 +1,29 @@
+# What the Developer Hub software templates may change in ai-demo (and nothing else):
+# traffic patterns (VirtualServices), Argo Rollouts, and Deployment replicas.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rhdh-platform-actions
+rules:
+  - apiGroups: [networking.istio.io]
+    resources: [virtualservices]
+    verbs: [get, patch]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts, rollouts/status]
+    verbs: [get, patch]
+  - apiGroups: [apps]
+    resources: [deployments/scale]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rhdh-platform-actions
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rhdh-platform-actions
+subjects:
+  - kind: ServiceAccount
+    name: rhdh-platform-actions
+    namespace: rhdh

@@ -1,0 +1,83 @@
+# MongoDB (community image) for the CQRS read model. No database auth on purpose: inside the mesh
+# only projection-service may open a connection (see mesh/authorization-policies.yaml).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-data
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  labels:
+    app: mongodb
+    backstage.io/kubernetes-id: mongodb
+    app.kubernetes.io/part-of: ai-demo
+spec:
+  selector:
+    app: mongodb
+  ports:
+  - name: tcp-mongo
+    port: 27017
+    targetPort: 27017
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  labels:
+    app: mongodb
+    version: v1
+    backstage.io/kubernetes-id: mongodb
+    app.kubernetes.io/part-of: ai-demo
+    app.openshift.io/runtime: mongodb
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+        version: v1
+        backstage.io/kubernetes-id: mongodb
+    spec:
+      serviceAccountName: mongodb
+      containers:
+      - name: mongodb
+        image: docker.io/library/mongo:8.0
+        args:
+        - --bind_ip_all
+        ports:
+        - containerPort: 27017
+        readinessProbe:
+          tcpSocket:
+            port: 27017
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '1'
+            memory: 1Gi
+        volumeMounts:
+        - name: data
+          mountPath: /data/db
+        - name: config
+          mountPath: /data/configdb
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: mongodb-data
+      - name: config
+        emptyDir: {}
