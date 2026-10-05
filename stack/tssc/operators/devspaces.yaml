@@ -1,0 +1,12 @@
+# Red Hat OpenShift Dev Spaces (browser IDE; commits are signed there with gitsign + RHTAS)
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: devspaces
+  namespace: openshift-operators
+spec:
+  channel: stable
+  name: devspaces
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

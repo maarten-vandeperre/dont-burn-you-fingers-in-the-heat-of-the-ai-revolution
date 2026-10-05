@@ -1,0 +1,34 @@
+# Trusted Artifact Signer instance for older operators (API rhtas.redhat.com/v1alpha1).
+# Same meaning as securesign-v1.yaml; tssc.sh picks the version the operator serves.
+apiVersion: rhtas.redhat.com/v1alpha1
+kind: Securesign
+metadata:
+  name: rhtas
+  namespace: trusted-artifact-signer
+  labels:
+    app.kubernetes.io/part-of: trusted-artifact-signer
+spec:
+  fulcio:
+    externalAccess:
+      enabled: true
+    config:
+      OIDCIssuers:
+        - ClientID: trusted-artifact-signer
+          IssuerURL: __ISSUER__
+          Issuer: __ISSUER__
+          Type: email
+    certificate:
+      organizationName: Platform demo
+      organizationEmail: admin@demo.example.com
+  rekor:
+    externalAccess:
+      enabled: true
+  tuf:
+    externalAccess:
+      enabled: true
+    # Operator 1.4 defaults this list to also include tsa.certchain.pem. There is no timestamp
+    # authority in this install, so that secret is never created and TUF stays Pending forever.
+    keys:
+      - name: rekor.pub
+      - name: ctfe.pub
+      - name: fulcio_v1.crt.pem

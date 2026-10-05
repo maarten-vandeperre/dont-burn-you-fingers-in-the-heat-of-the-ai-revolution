@@ -49,11 +49,11 @@ Every step also says where the rule is **defined** and how to **change** it. All
 
 > **After a change**
 > * a rule file (`config.yaml`, `rails.co`, `actions.py`, `prompts.yml`): rules load at startup,
-    >   so `podman compose restart guardrails-qwen guardrails-openai` (a few seconds)
+>   so `podman compose restart guardrails-qwen guardrails-openai` (a few seconds)
 > * an environment value (`.env`, `compose.yaml`): `podman compose up -d`
 > * the app or the UI (`src/`): `podman compose up --build -d`
 > * check without a model: `python guardrails/test_rails.py`. Its scenarios check the answer
-    >   texts, so update `SCENARIOS` there when you change a message.
+>   texts, so update `SCENARIOS` there when you change a message.
 
 **B1. A normal order.**
 * **Do:** `A large oat flat white, please.` > **Send**.
@@ -127,21 +127,21 @@ Every step also says where the rule is **defined** and how to **change** it. All
 * **Say:** "A business rule that no model knows, enforced in ten lines of Python. And when the model
   itself suggests a cappuccino in the afternoon, the output rail catches that too."
 * **Defined in:**
-    * `rails.co` > `define flow check cappuccino time` (input) and `define flow check cappuccino
+  * `rails.co` > `define flow check cappuccino time` (input) and `define flow check cappuccino
     output` (answer); the text with the pineapple is `define bot refuse cappuccino after noon`
-    * `actions.py` > `check_cappuccino_time`: the drink is the regex `CAPPUCCINO` (catches
-      misspellings), "after noon" is `(12, 0)` in `is_afternoon`, the time comes from `shop_time()`
-      (the app's clock, `SHOP_CLOCK_URL`; real time in `SHOP_TIMEZONE` from `.env`)
-    * the demo clock's morning and afternoon times: `ShopClock.java` (09:30 and 15:00)
+  * `actions.py` > `check_cappuccino_time`: the drink is the regex `CAPPUCCINO` (catches
+    misspellings), "after noon" is `(12, 0)` in `is_afternoon`, the time comes from `shop_time()`
+    (the app's clock, `SHOP_CLOCK_URL`; real time in `SHOP_TIMEZONE` from `.env`)
+  * the demo clock's morning and afternoon times: `ShopClock.java` (09:30 and 15:00)
 * **Change it:**
-    * other text: edit `define bot refuse cappuccino after noon`. Keep the phrase **after noon** in
-      it: `OWN_REMARK` in `actions.py` uses it to recognise the refusal, so the output check does not
-      block the shop's own answer
-    * other drinks too: extend the regex, e.g. `r"\b(cap+uc+h?in[oi]s?|latte macchiato)\b"`
-    * another cut-off time: `(12, 0)` in `is_afternoon`, e.g. `(11, 0)`; then also adapt the text
-      and `OWN_REMARK` if "after noon" is no longer true
-    * let the model suggest cappuccinos anyway: remove `check cappuccino output` from
-      `rails.output.flows` in `config.yaml`
+  * other text: edit `define bot refuse cappuccino after noon`. Keep the phrase **after noon** in
+    it: `OWN_REMARK` in `actions.py` uses it to recognise the refusal, so the output check does not
+    block the shop's own answer
+  * other drinks too: extend the regex, e.g. `r"\b(cap+uc+h?in[oi]s?|latte macchiato)\b"`
+  * another cut-off time: `(12, 0)` in `is_afternoon`, e.g. `(11, 0)`; then also adapt the text
+    and `OWN_REMARK` if "after noon" is no longer true
+  * let the model suggest cappuccinos anyway: remove `check cappuccino output` from
+    `rails.output.flows` in `config.yaml`
 
 **B7. Answers stay short.**
 * **Do:** `Tell me everything about how you make your coffee` > **Send**.

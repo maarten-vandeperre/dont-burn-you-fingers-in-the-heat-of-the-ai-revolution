@@ -1,0 +1,71 @@
+# PostgreSQL for Trusted Profile Analyzer (PoC). Credentials: Secret rhtpa-db (created by tssc.sh),
+# exposed to the chart as postgresql-credentials / postgresql-admin-credentials.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rhtpa-db
+  namespace: trusted-profile-analyzer
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rhtpa-db
+  namespace: trusted-profile-analyzer
+  labels:
+    app: rhtpa-db
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: rhtpa-db
+  template:
+    metadata:
+      labels:
+        app: rhtpa-db
+    spec:
+      containers:
+        - name: postgresql
+          image: registry.redhat.io/rhel9/postgresql-16@sha256:3943bfa5de044d8f033df148c0409ed826171b779f3cf3ddf537a1914960ab57
+          env:
+            - name: POSTGRESQL_USER
+              valueFrom: {secretKeyRef: {name: rhtpa-db, key: username}}
+            - name: POSTGRESQL_PASSWORD
+              valueFrom: {secretKeyRef: {name: rhtpa-db, key: password}}
+            - name: POSTGRESQL_ADMIN_PASSWORD
+              valueFrom: {secretKeyRef: {name: rhtpa-db, key: admin-password}}
+            - name: POSTGRESQL_DATABASE
+              value: trustify
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["/usr/libexec/check-container"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/pgsql/data
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rhtpa-db
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rhtpa-db
+  namespace: trusted-profile-analyzer
+spec:
+  selector:
+    app: rhtpa-db
+  ports:
+    - port: 5432
+      targetPort: 5432

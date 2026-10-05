@@ -10,9 +10,11 @@ demo takes 5 to 10 minutes and works on its own; all of them use the same runnin
 | [1. Models and RAG](01-models-and-rag.md) | MaaS with Gemma and Qwen, Gen AI playground, RAG with LangChain4j, the Camel model router and its OpenAI fallback |
 | [2. Mesh security](02-mesh-security.md) | STRICT mTLS, who-can-access-who with AuthorizationPolicies |
 | [3. Deployment patterns](03-deployment-patterns.md) | Canary, A/B, blue-green, mirroring, Argo Rollouts |
+| [Service mesh manifests](service-mesh.md) | The same mesh demos, file by file: which field to edit and the `oc apply` that makes it live |
 | [4. Change data capture](04-change-data-capture.md) | PostgreSQL to Kafka to MongoDB with Debezium |
 | [5. Observability](05-observability.md) | One trace across all services, token metrics, dashboard, alerts |
 | [6. Developer Hub](06-developer-hub.md) | The platform as a catalog, sign-in with Keycloak, source in GitLab, changing it with templates |
+| [8. Trusted software supply chain](08-trusted-software-supply-chain.md) | Signed commit in Dev Spaces (gitsign + Trusted Artifact Signer), pipeline: verify, CI, sign, SBOM, Trusted Profile Analyzer, ACS checks, release, Argo CD |
 | [Guarded Coffee](../../app/coffee-guardrails/DEMO.md) | NeMo Guardrails (TrustyAI) on the laptop: coffee only, 200 character limits, PII masking, no cappuccino after noon; same config on OpenShift AI |
 | [Camel on the laptop](../../app/camel-ai-demo/README.md) | Local Camel demo: one API for Qwen (Podman AI Lab), OpenAI and Anthropic, files, live routes, Kaoto and Hawtio |
 | [7. Platform Coffee](07-coffee-shop.md) | One app, every capability: AI ordering, menu releases and chaos in the mesh, CDC audit trail |

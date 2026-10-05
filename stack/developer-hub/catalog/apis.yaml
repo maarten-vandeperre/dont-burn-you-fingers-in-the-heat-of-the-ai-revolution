@@ -12,7 +12,7 @@ spec:
   definition: |
     openapi: 3.0.3
     info: {title: AI demo backend-for-frontend, version: 1.0.0}
-    servers: [{url: "https://ai-demo-ai-demo.apps.cluster-ljzqb.dyn.redhatworkshops.io"}]
+    servers: [{url: "https://ai-demo-ai-demo.apps.cluster-6qx55.dyn.redhatworkshops.io"}]
     paths:
       /api/ask:
         post:
@@ -179,7 +179,7 @@ spec:
   definition: |
     openapi: 3.0.3
     info: {title: coffee-shop, version: 1.0.0}
-    servers: [{url: "https://coffee-ai-demo.apps.cluster-ljzqb.dyn.redhatworkshops.io"}]
+    servers: [{url: "https://coffee-ai-demo.apps.cluster-6qx55.dyn.redhatworkshops.io"}]
     paths:
       /api/interpret:
         post:

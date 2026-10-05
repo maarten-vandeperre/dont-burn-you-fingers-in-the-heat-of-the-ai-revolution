@@ -12,6 +12,7 @@
 #   cdc-demo    Insert a row in the demo database and show the Debezium event from Kafka
 #   urls        Print the URLs of every UI in the stack
 #   app <cmd>   Demo applications in app/ (RAG, mesh patterns, CDC): same as app/demo.sh <cmd>
+#   tssc <cmd>  Trusted software supply chain: setup | run | verify | urls | destroy (stack/tssc/tssc.sh)
 #   rhdh        Developer Hub: render the catalog, wire tokens, enable the plugins of the running version
 #   sso         Install / update Keycloak (single sign-on) and GitLab on an existing stack
 #   gitlab      Push this repository into GitLab (group ai-platform) and register it with Argo CD
@@ -1771,6 +1772,21 @@ p_rhdh_sees() {  # p_rhdh_sees <namespace> <component>
   echo "no workloads labelled backstage.io/kubernetes-id=$2 in $1 (not deployed: ./deploy.sh app all)"; return 1
 }
 
+p_tssc() {  # p_tssc <what>
+  case "$1" in
+    rhtas) [[ "$(oc get securesign rhtas -n trusted-artifact-signer -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == True ]] \
+             && echo "Securesign rhtas Ready" || { echo "not Ready: oc get securesign rhtas -n trusted-artifact-signer -o yaml"; return 1; } ;;
+    tpa)   local h; h=$(oc get route -n trusted-profile-analyzer --selector app.kubernetes.io/name=server -o jsonpath='{.items[0].spec.host}' 2>/dev/null || true)
+           [[ -n "$h" ]] && echo "https://${h}" || { echo "not installed (needs helm): pipeline simulates the TPA step"; return 2; } ;;
+    ci)    oc get pipeline trusted-supply-chain -n tssc-ci >/dev/null 2>&1 && oc get secret cosign-signing -n tssc-ci >/dev/null 2>&1 \
+             && oc get istag tssc-tools:latest -n tssc-ci >/dev/null 2>&1 && echo "pipeline, tools image, cosign key" \
+             || { echo "incomplete: ./deploy.sh tssc setup"; return 1; } ;;
+    last)  local r; r=$(oc get pipelinerun -n tssc-ci --sort-by=.metadata.creationTimestamp -o jsonpath='{range .items[*]}{.metadata.name} {.status.conditions[0].reason}{"\n"}{end}' 2>/dev/null | tail -1)
+           [[ -z "$r" ]] && { echo "no run yet: ./deploy.sh tssc run"; return 2; }
+           [[ "$r" == *Succeeded* || "$r" == *Completed* ]] && echo "$r" || { echo "$r"; return 2; } ;;
+  esac
+}
+
 p_coffee_menu() {
   local out; out=$(curl -sk --max-time 30 "$1/api/menu" || true)
   grep -q '"source":"live"' <<<"$out" && { echo "menu $(sed -n 's/.*"version":"\([^"]*\)".*/\1/p' <<<"$out") live"; return 0; }
@@ -1860,6 +1876,12 @@ validate() {
   for comp in frontend rag-service model-router coffee-shop coffee-menu; do
     v_check rhdh    "Topology data: ${comp}"                   p_rhdh_sees ai-demo "$comp"
   done
+  if oc get namespace tssc-ci >/dev/null 2>&1; then   # only once ./deploy.sh tssc setup ran
+    v_check tssc    "Trusted Artifact Signer"                  p_tssc rhtas
+    v_check tssc    "Trusted Profile Analyzer"                 p_tssc tpa
+    v_check tssc    "pipeline trusted-supply-chain"            p_tssc ci
+    v_check tssc    "last supply chain run"                    p_tssc last
+  fi
 
   local d
   for d in frontend rag-service-v1 rag-service-v2 model-router orders-service projection-service mongodb coffee-shop coffee-menu-v1 coffee-menu-v2 ai-demo-gateway; do
@@ -2228,6 +2250,7 @@ done_banner() {
 CMD=$1; shift
 # the demo apps have their own CLI: hand over all remaining arguments untouched
 [[ "$CMD" == "app" ]] && exec "${ROOT_DIR}/app/demo.sh" "$@"
+[[ "$CMD" == "tssc" ]] && exec "${ROOT_DIR}/stack/tssc/tssc.sh" "$@"
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case $1 in

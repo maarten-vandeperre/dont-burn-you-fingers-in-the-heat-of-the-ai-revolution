@@ -1,0 +1,12 @@
+# Red Hat Trusted Artifact Signer (Sigstore: Fulcio, Rekor, TUF, CT log, TSA, CLI server)
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: rhtas-operator
+  namespace: openshift-operators
+spec:
+  channel: stable
+  name: rhtas-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

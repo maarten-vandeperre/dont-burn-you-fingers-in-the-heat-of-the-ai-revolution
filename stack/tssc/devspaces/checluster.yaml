@@ -1,0 +1,14 @@
+# Dev Spaces with defaults: users sign in with OpenShift; each user gets <user>-devspaces.
+apiVersion: org.eclipse.che/v2
+kind: CheCluster
+metadata:
+  name: devspaces
+  namespace: openshift-devspaces
+spec:
+  components: {}
+  devEnvironments:
+    secondsOfInactivityBeforeIdling: 3600
+    defaultNamespace:
+      template: <username>-devspaces
+      autoProvision: true
+  networking: {}

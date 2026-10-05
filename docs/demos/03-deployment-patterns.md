@@ -6,6 +6,10 @@ canary, A/B, blue-green or mirroring, changed in seconds and undone just as fast
 
 **Duration:** 15 minutes (8 UI, 5 IntelliJ, 2 automated canary). Each part also works on its own.
 
+`./deploy.sh app pattern` applies one file under `app/deploy/patterns/`. To edit the weights,
+the header match or the mirror block yourself and apply that file: [Service mesh manifests](service-mesh.md),
+section 2.
+
 **The versions:** rag-service **v1** (short answers, top 3 passages) and **v2** (bullet points with
 citations, top 5 passages). Same image, behind one Kubernetes Service.
 
@@ -94,6 +98,10 @@ Kiali shows the same split on the edges into rag-service v1 and v2.
   and `mirrorPercentage` in mirror.
 * **Say:** "Each release strategy is about ten lines of YAML. `./deploy.sh app pattern` only applies
   one of these files; in a GitOps setup it is a merge request."
+* **Do (by hand):** edit the two `weight` values in `canary.yaml` so they add up to 100, then
+  `oc apply -f app/deploy/patterns/canary.yaml`. The object name stays `rag-service`. The same
+  apply works for `ab.yaml`, `blue.yaml`, `green.yaml`, `mirror.yaml` and `reset.yaml`. Field by
+  field: [service-mesh.md](service-mesh.md), section 2.
 
 **B4. How the version shows up.**
 * **Do:** open `RagResource.java`, method **`version()`**.

@@ -1,0 +1,55 @@
+# Trusted Profile Analyzer (Helm chart openshift-helm-charts/redhat-trusted-profile-analyzer),
+# after the "Red Hat services" template of the RHTPA 2 Deployment Guide, adapted for a demo:
+# filesystem storage instead of S3, the PoC PostgreSQL rhtpa-db, the platform Keycloak (realm demo).
+# __ISSUER__ is filled in by tssc.sh; appDomain is passed with --set-string.
+ingress:
+  className: openshift-default
+  additionalAnnotations:
+    "haproxy.router.openshift.io/timeout": "5m"
+
+storage:
+  type: filesystem
+  size: 10Gi
+
+database:
+  sslMode: disable
+  host:
+    valueFrom: {secretKeyRef: {name: postgresql-credentials, key: db.host}}
+  port:
+    valueFrom: {secretKeyRef: {name: postgresql-credentials, key: db.port}}
+  name:
+    valueFrom: {secretKeyRef: {name: postgresql-credentials, key: db.name}}
+  username:
+    valueFrom: {secretKeyRef: {name: postgresql-credentials, key: db.user}}
+  password:
+    valueFrom: {secretKeyRef: {name: postgresql-credentials, key: db.password}}
+
+createDatabase:
+  name:
+    valueFrom: {secretKeyRef: {name: postgresql-admin-credentials, key: db.name}}
+  username:
+    valueFrom: {secretKeyRef: {name: postgresql-admin-credentials, key: db.user}}
+  password:
+    valueFrom: {secretKeyRef: {name: postgresql-admin-credentials, key: db.password}}
+
+migrateDatabase:
+  username:
+    valueFrom: {secretKeyRef: {name: postgresql-admin-credentials, key: db.user}}
+  password:
+    valueFrom: {secretKeyRef: {name: postgresql-admin-credentials, key: db.password}}
+
+modules:
+  createDatabase:
+    enabled: true
+  migrateDatabase:
+    enabled: true
+
+oidc:
+  issuerUrl: __ISSUER__
+  clients:
+    frontend:
+      clientId: rhtpa-frontend
+    cli:
+      clientId: rhtpa-cli
+      clientSecret:
+        valueFrom: {secretKeyRef: {name: oidc-cli, key: client-secret}}

@@ -1,0 +1,10 @@
+# CI part of the trusted software supply chain (applied by stack/tssc/tssc.sh after the
+# operators, RHTAS and RHTPA are ready).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - tools-build.yaml
+  - pipeline.yaml
+  - triggers.yaml

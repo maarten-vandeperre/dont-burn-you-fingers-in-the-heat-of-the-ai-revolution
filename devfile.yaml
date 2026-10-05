@@ -1,0 +1,31 @@
+# Dev Spaces workspace for this repository (open: Dev Spaces URL + /#<GitLab repository URL>).
+# Commands (Terminal > Run Task > devfile): set up commit signing with Trusted Artifact Signer,
+# sign a commit and push it (starts the trusted supply chain pipeline), verify the last commit.
+schemaVersion: 2.2.0
+metadata:
+  name: ocp422-ai-platform
+components:
+  - name: tools
+    container:
+      image: registry.redhat.io/devspaces/udi-rhel9:latest
+      memoryLimit: 4Gi
+      mountSources: true
+commands:
+  - id: 1-setup-signing
+    exec:
+      label: "1. Set up commit signing (gitsign + Trusted Artifact Signer)"
+      component: tools
+      workingDir: ${PROJECT_SOURCE}
+      commandLine: bash stack/tssc/devspaces/sign-setup.sh
+  - id: 2-sign-commit
+    exec:
+      label: "2. Sign a commit and push (starts the pipeline)"
+      component: tools
+      workingDir: ${PROJECT_SOURCE}
+      commandLine: bash stack/tssc/devspaces/sign-commit.sh
+  - id: 3-verify-commit
+    exec:
+      label: "3. Verify the last commit"
+      component: tools
+      workingDir: ${PROJECT_SOURCE}
+      commandLine: bash stack/tssc/devspaces/verify-commit.sh

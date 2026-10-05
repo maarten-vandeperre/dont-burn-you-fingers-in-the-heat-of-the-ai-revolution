@@ -26,7 +26,6 @@ metadata:
     backstage.io/kubernetes-id: rag-service
     app.openshift.io/runtime: quarkus
   annotations:
-    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"rag-service:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"app\")].image"}]'
     app.openshift.io/connects-to: '[{"apiVersion":"apps/v1","kind":"Deployment","name":"model-router"}]'
 spec:
   replicas: 1
@@ -93,7 +92,6 @@ metadata:
     backstage.io/kubernetes-id: rag-service
     app.openshift.io/runtime: quarkus
   annotations:
-    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"rag-service:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"app\")].image"}]'
     app.openshift.io/connects-to: '[{"apiVersion":"apps/v1","kind":"Deployment","name":"model-router"}]'
 spec:
   replicas: 1

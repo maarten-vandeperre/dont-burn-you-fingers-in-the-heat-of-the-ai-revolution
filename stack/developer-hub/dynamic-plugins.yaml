@@ -15,8 +15,6 @@ plugins:
     disabled: false
   - package: 'oci://ghcr.io/redhat-developer/rhdh-plugin-export-overlays/roadiehq-backstage-plugin-argo-cd-backend@sha256:39f4ea164aa3c430595ee2a0921ce021a1ea48aea2a57ae937b6d476bcc86c8b'
     disabled: false
-  - package: 'oci://ghcr.io/redhat-developer/rhdh-plugin-export-overlays/backstage-community-plugin-argocd:bs_1.49.4__2.8.0!backstage-community-plugin-argocd'  # extensions
-    disabled: false
   - package: 'oci://registry.access.redhat.com/rhdh/roadiehq-scaffolder-backend-module-http-request@sha256:4868bcc51d9f6356cf76fdfa0e1ad9f151c7a0518fb840ab7c909972d84d015d'
     disabled: false
   - package: './dynamic-plugins/dist/backstage-community-plugin-scaffolder-backend-module-kubernetes-dynamic'

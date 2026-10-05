@@ -99,6 +99,6 @@ spec:
       - title: rag-service in the catalog
         entityRef: component:default/rag-service
       - title: Kiali graph (versioned)
-        url: https://kiali-istio-system.apps.cluster-ljzqb.dyn.redhatworkshops.io/console/graph/namespaces/?namespaces=ai-demo&graphType=versionedApp
+        url: https://kiali-istio-system.apps.cluster-6qx55.dyn.redhatworkshops.io/console/graph/namespaces/?namespaces=ai-demo&graphType=versionedApp
       - title: Demo UI (Traffic patterns tab)
-        url: https://ai-demo-ai-demo.apps.cluster-ljzqb.dyn.redhatworkshops.io
+        url: https://ai-demo-ai-demo.apps.cluster-6qx55.dyn.redhatworkshops.io

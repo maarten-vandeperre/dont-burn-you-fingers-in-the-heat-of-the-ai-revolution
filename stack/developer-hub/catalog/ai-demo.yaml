@@ -5,11 +5,11 @@ metadata:
   title: AI demo applications
   description: RAG with LangChain4j and Camel, mesh security and deployment patterns, CDC to MongoDB
   links:
-    - {url: "https://ai-demo-ai-demo.apps.cluster-ljzqb.dyn.redhatworkshops.io", title: Demo UI, icon: dashboard}
-    - {url: "https://coffee-ai-demo.apps.cluster-ljzqb.dyn.redhatworkshops.io", title: Coffee shop, icon: dashboard}
-    - {url: "https://gitlab-gitlab.apps.cluster-ljzqb.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app", title: Source (GitLab)}
-    - {url: "https://kiali-istio-system.apps.cluster-ljzqb.dyn.redhatworkshops.io/console/graph/namespaces/?namespaces=ai-demo&graphType=versionedApp", title: Kiali graph}
-    - {url: "https://console-openshift-console.apps.cluster-ljzqb.dyn.redhatworkshops.io/monitoring/dashboards", title: "Dashboard: AI demo"}
+    - {url: "https://ai-demo-ai-demo.apps.cluster-6qx55.dyn.redhatworkshops.io", title: Demo UI, icon: dashboard}
+    - {url: "https://coffee-ai-demo.apps.cluster-6qx55.dyn.redhatworkshops.io", title: Coffee shop, icon: dashboard}
+    - {url: "https://gitlab-gitlab.apps.cluster-6qx55.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app", title: Source (GitLab)}
+    - {url: "https://kiali-istio-system.apps.cluster-6qx55.dyn.redhatworkshops.io/console/graph/namespaces/?namespaces=ai-demo&graphType=versionedApp", title: Kiali graph}
+    - {url: "https://console-openshift-console.apps.cluster-6qx55.dyn.redhatworkshops.io/monitoring/dashboards", title: "Dashboard: AI demo"}
 spec:
   owner: ai-app-team
   domain: ai-platform
@@ -23,11 +23,11 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: frontend
     backstage.io/kubernetes-namespace: ai-demo
-    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-ljzqb.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/frontend/
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-6qx55.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/frontend/
     tekton.dev/cicd: "true"
     argocd/app-name: ai-demo
   links:
-    - {url: "https://ai-demo-ai-demo.apps.cluster-ljzqb.dyn.redhatworkshops.io", title: Open the UI, icon: dashboard}
+    - {url: "https://ai-demo-ai-demo.apps.cluster-6qx55.dyn.redhatworkshops.io", title: Open the UI, icon: dashboard}
   tags: [quarkus, java25, react, vite, tailwind]
 spec:
   type: website
@@ -46,11 +46,11 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: rag-service
     backstage.io/kubernetes-namespace: ai-demo
-    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-ljzqb.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/rag-service/
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-6qx55.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/rag-service/
     tekton.dev/cicd: "true"
     argocd/app-name: ai-demo
   links:
-    - {url: "https://kiali-istio-system.apps.cluster-ljzqb.dyn.redhatworkshops.io/console/namespaces/ai-demo/services/rag-service", title: Kiali service}
+    - {url: "https://kiali-istio-system.apps.cluster-6qx55.dyn.redhatworkshops.io/console/namespaces/ai-demo/services/rag-service", title: Kiali service}
   tags: [quarkus, langchain4j, rag]
 spec:
   type: service
@@ -69,7 +69,7 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: model-router
     backstage.io/kubernetes-namespace: ai-demo
-    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-ljzqb.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/model-router/
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-6qx55.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/model-router/
     tekton.dev/cicd: "true"
     argocd/app-name: ai-demo
   tags: [quarkus, camel, ai-gateway]
@@ -90,7 +90,7 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: orders-service
     backstage.io/kubernetes-namespace: ai-demo
-    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-ljzqb.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/orders-service/
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-6qx55.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/orders-service/
     tekton.dev/cicd: "true"
     argocd/app-name: ai-demo
   tags: [quarkus, panache, postgresql]
@@ -111,7 +111,7 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: projection-service
     backstage.io/kubernetes-namespace: ai-demo
-    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-ljzqb.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/projection-service/
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-6qx55.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/projection-service/
     tekton.dev/cicd: "true"
     argocd/app-name: ai-demo
   tags: [quarkus, kafka, debezium, mongodb]
@@ -132,11 +132,11 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: coffee-shop
     backstage.io/kubernetes-namespace: ai-demo
-    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-ljzqb.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/coffee-shop/
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-6qx55.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/coffee-shop/
     tekton.dev/cicd: "true"
     argocd/app-name: ai-demo
   links:
-    - {url: "https://coffee-ai-demo.apps.cluster-ljzqb.dyn.redhatworkshops.io", title: Open the coffee shop, icon: dashboard}
+    - {url: "https://coffee-ai-demo.apps.cluster-6qx55.dyn.redhatworkshops.io", title: Open the coffee shop, icon: dashboard}
   tags: [quarkus, java25, langchain4j, react, debezium]
 spec:
   type: website
@@ -156,11 +156,11 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: coffee-menu
     backstage.io/kubernetes-namespace: ai-demo
-    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-ljzqb.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/coffee-menu/
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.cluster-6qx55.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/app/coffee-menu/
     tekton.dev/cicd: "true"
     argocd/app-name: ai-demo
   links:
-    - {url: "https://kiali-istio-system.apps.cluster-ljzqb.dyn.redhatworkshops.io/console/namespaces/ai-demo/services/coffee-menu", title: Kiali service}
+    - {url: "https://kiali-istio-system.apps.cluster-6qx55.dyn.redhatworkshops.io/console/namespaces/ai-demo/services/coffee-menu", title: Kiali service}
   tags: [quarkus, service-mesh, chaos]
 spec:
   type: service

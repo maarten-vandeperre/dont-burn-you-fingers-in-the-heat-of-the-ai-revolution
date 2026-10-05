@@ -1,0 +1,121 @@
+# GitLab push -> pipeline. Only pushes to main that change app/coffee-menu/ start a run; the
+# repository snapshots pushed by ./deploy.sh gitlab ("Platform snapshot ...") are ignored.
+# tssc.sh creates the GitLab webhook (secret tssc-secrets/gitlab-webhook-token).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tssc-triggers
+  namespace: tssc-ci
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tssc-triggers
+  namespace: tssc-ci
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: tekton-triggers-eventlistener-roles}
+subjects:
+  - {kind: ServiceAccount, name: tssc-triggers, namespace: tssc-ci}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tssc-triggers
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: tekton-triggers-eventlistener-clusterroles}
+subjects:
+  - {kind: ServiceAccount, name: tssc-triggers, namespace: tssc-ci}
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerBinding
+metadata:
+  name: gitlab-push
+  namespace: tssc-ci
+spec:
+  params:
+    - {name: git-url, value: $(body.project.git_http_url)}
+    - {name: git-revision, value: $(body.checkout_sha)}
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: trusted-supply-chain
+  namespace: tssc-ci
+spec:
+  params:
+    - name: git-url
+    - name: git-revision
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: coffee-menu-
+        labels:
+          tekton.dev/pipeline: trusted-supply-chain
+          app.kubernetes.io/part-of: trusted-software-supply-chain
+      spec:
+        pipelineRef:
+          name: trusted-supply-chain
+        params:
+          - {name: git-url, value: $(tt.params.git-url)}
+          - {name: git-revision, value: $(tt.params.git-revision)}
+        taskRunTemplate:
+          serviceAccountName: pipeline
+        workspaces:
+          - name: source
+            volumeClaimTemplate:
+              spec:
+                accessModes: [ReadWriteOnce]
+                resources:
+                  requests:
+                    storage: 5Gi
+          - name: cosign
+            secret:
+              secretName: cosign-signing
+---
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: gitlab-push
+  namespace: tssc-ci
+spec:
+  serviceAccountName: tssc-triggers
+  triggers:
+    - name: coffee-menu-push
+      interceptors:
+        - ref:
+            name: gitlab
+            kind: ClusterInterceptor
+          params:
+            - name: secretRef
+              value:
+                secretName: tssc-secrets
+                secretKey: gitlab-webhook-token
+            - name: eventTypes
+              value: ["Push Hook"]
+        - ref:
+            name: cel
+            kind: ClusterInterceptor
+          params:
+            - name: filter
+              value: >-
+                body.ref == 'refs/heads/main' &&
+                !body.commits.exists(c, c.message.startsWith('Platform snapshot')) &&
+                body.commits.exists(c, c.added.exists(f, f.startsWith('app/coffee-menu/')) ||
+                                       c.modified.exists(f, f.startsWith('app/coffee-menu/')))
+      bindings:
+        - ref: gitlab-push
+      template:
+        ref: trusted-supply-chain
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: gitlab-push
+  namespace: tssc-ci
+spec:
+  to:
+    kind: Service
+    name: el-gitlab-push
+  port:
+    targetPort: http-listener
+  tls:
+    termination: edge

@@ -108,4 +108,4 @@ spec:
       - title: coffee-menu in the catalog
         entityRef: component:default/coffee-menu
       - title: Coffee shop (Menu & resilience tab)
-        url: https://coffee-ai-demo.apps.cluster-ljzqb.dyn.redhatworkshops.io
+        url: https://coffee-ai-demo.apps.cluster-6qx55.dyn.redhatworkshops.io

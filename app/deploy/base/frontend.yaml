@@ -25,7 +25,6 @@ metadata:
     backstage.io/kubernetes-id: frontend
     app.openshift.io/runtime: quarkus
   annotations:
-    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"frontend:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"app\")].image"}]'
     app.openshift.io/connects-to: '[{"apiVersion":"apps/v1","kind":"Deployment","name":"rag-service-v1"},{"apiVersion":"apps/v1","kind":"Deployment","name":"rag-service-v2"},{"apiVersion":"apps/v1","kind":"Deployment","name":"orders-service"},{"apiVersion":"apps/v1","kind":"Deployment","name":"projection-service"}]'
 spec:
   replicas: 1

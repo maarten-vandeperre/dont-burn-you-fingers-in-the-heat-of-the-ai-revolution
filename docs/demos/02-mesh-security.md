@@ -7,6 +7,8 @@ it could not reach them.
 
 **Duration:** 15 minutes (5 demo UI, 5 Kiali and console, 5 IntelliJ). Each part also works on its own.
 
+To make the edits yourself, with every field and the `oc apply`: [Service mesh manifests](service-mesh.md), section 1.
+
 **Who may call whom:**
 ```
 ai-demo-gateway (ingress) -> frontend -> rag-service -> model-router -> models
@@ -22,7 +24,7 @@ Every step below has three parts: **Do** (what you click or open), **You see** (
 
 ## Before you start
 
-1. In a terminal in the app repository folder (/app):
+1. In a terminal in the repository folder:
    ```bash
    ./deploy.sh app probe     # five lines, all starting with OK
    ./deploy.sh urls          # Kiali and console URLs
@@ -141,6 +143,13 @@ Every step below has three parts: **Do** (what you click or open), **You see** (
   restart."
 * **Do (revert):** remove the line, save, run the same `oc apply`, **Run probe** again: all rows are
   back to **as expected**.
+
+The same file is where every other allow is edited. `principals` is the caller's service account
+(`cluster.local/ns/ai-demo/sa/<name>` from `app/deploy/base/serviceaccounts.yaml`). `paths` on
+`rag-from-frontend` is what the frontend may request (`/api/rag/*`). `mode: STRICT` in
+`peer-authentication.yaml` is the certificate requirement. Section 1 of
+[service-mesh.md](service-mesh.md) walks through each of those edits, the apply command, and how
+to put the file back.
 
 ---
 

@@ -5,7 +5,7 @@ metadata:
   title: Models-as-a-Service
   description: Self-hosted models behind the MaaS gateway (API keys, token quotas, usage)
   links:
-    - {url: "https://maas.apps.cluster-ljzqb.dyn.redhatworkshops.io/v1/models", title: MaaS endpoint}
+    - {url: "https://maas.apps.cluster-6qx55.dyn.redhatworkshops.io/v1/models", title: MaaS endpoint}
 spec:
   owner: platform-team
   domain: ai-platform

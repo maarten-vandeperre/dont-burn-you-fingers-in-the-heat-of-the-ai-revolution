@@ -1,0 +1,7 @@
+# Operators of the trusted software supply chain layer (OpenShift Pipelines, GitOps and Keycloak
+# come from the platform stack).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - rhtas.yaml
+  - devspaces.yaml

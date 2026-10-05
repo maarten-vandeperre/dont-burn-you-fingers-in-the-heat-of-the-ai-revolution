@@ -63,11 +63,95 @@ Every step below has three parts: **Do**, **You see**, **Say**.
   the projection-service stores them in MongoDB, and this tab reads only MongoDB. A complete audit
   trail, without a single line of audit code in the application."
 
+### Show it on Kafka (optional, 4 minutes)
+
+The Audit tab shows the **source table** of each change (`coffee.orders`). The event itself
+travels through a Kafka **topic** named `<prefix>.<schema>.<table>`: Debezium's prefix is
+`inventory` (`stack/kafka/connector.yaml`), so:
+
+| Source table (Audit tab) | Kafka topic | Read by |
+|---|---|---|
+| `coffee.orders` | `inventory.coffee.orders` | projection-service, consumer group `projection-service-coffee` |
+| `coffee.order_lines` | `inventory.coffee.order_lines` | same |
+
+**B1. The topics.**
+* **Do:** in a terminal, define a small helper once:
+  ```bash
+  kafka() { local tool=$1; shift; oc exec -n kafka platform-dual-role-0 -c kafka -- /opt/kafka/bin/"$tool" --bootstrap-server localhost:9092 "$@"; }
+  ```
+  (bash and zsh; it runs the Kafka tools inside the Kafka pod)
+  ```bash
+  kafka kafka-topics.sh --list | grep -v '^__'
+  ```
+* **You see:** `inventory.coffee.orders`, `inventory.coffee.order_lines`, the topics of demo 4
+  (`inventory.inventory.customers`, `inventory.inventory.orders`) and Kafka Connect's own
+  `debezium-connect-*` topics.
+* **Say:** "Nobody created these topics: Debezium did, one per captured table."
+
+**B2. The events, as they are stored.**
+* **Do:**
+  ```bash
+  kafka kafka-console-consumer.sh --topic inventory.coffee.orders --from-beginning --timeout-ms 5000 \
+    | jq -c 'select(. != null) | (.payload // .) | {op, order: (.after // .before).id, status: [.before.status, .after.status]}'
+  ```
+* **You see:** one line per change, oldest first, for example:
+  ```
+  {"op":"c","order":1,"status":[null,"PLACED"]}
+  {"op":"u","order":1,"status":["PLACED","BREWING"]}
+  {"op":"u","order":1,"status":["BREWING","READY"]}
+  ```
+  `op`: `c` created, `u` updated, `d` deleted, `r` read during the initial snapshot.
+* **Do (the full event):** the first event with all its fields:
+  ```bash
+  kafka kafka-console-consumer.sh --topic inventory.coffee.orders --from-beginning --max-messages 1 \
+    | jq '.payload // .'
+  ```
+* **You see:** `before`, `after` (the complete rows), `source` (database, schema, table, transaction
+  id, log position) and `ts_ms`.
+* **Say:** "Every change, with the row before and after. The Audit tab is just a readable view of
+  these events."
+
+**B3. Watch a change travel, live.**
+* **Do:** leave this running in a terminal next to the browser (Ctrl+C to stop):
+  ```bash
+  kafka kafka-console-consumer.sh --topic inventory.coffee.orders \
+    | jq -c 'select(. != null) | (.payload // .) | {op, order: (.after // .before).id, status: [.before.status, .after.status]}'
+  ```
+  In the app: **Orders** > **Start brewing** on an order.
+* **You see:** within a second a new line such as `{"op":"u","order":2,"status":["PLACED","BREWING"]}`,
+  and two seconds later the same change in the **Audit** tab.
+* **Say:** "The application did an UPDATE in PostgreSQL. Debezium read it from the database log
+  and put it on Kafka; the projection-service turned it into the audit document."
+
+**B4. Who reads it, and how far behind.**
+* **Do:**
+  ```bash
+  kafka kafka-consumer-groups.sh --describe --group projection-service-coffee
+  ```
+* **You see:** per topic `CURRENT-OFFSET` (what the projection-service has processed),
+  `LOG-END-OFFSET` (what is on the topic) and `LAG` (the difference): normally `0`.
+* **Do (resilience):** `oc scale deploy/projection-service -n ai-demo --replicas=0`; advance an order
+  twice in the app; run the command again: `LAG` is `2` and the Audit tab stays the same. Then
+  `oc scale deploy/projection-service -n ai-demo --replicas=1`: after a few seconds `LAG` is `0`
+  and both events are in the Audit tab.
+* **Say:** "Kafka keeps the events while the consumer is down. Nothing is lost, it just catches up."
+
 ---
 
 ## Part C: release the menu through the mesh (3 minutes)
 
 Switch scenarios in a terminal (or Developer Hub > **Create** > **Coffee menu: traffic & chaos**).
+Each command applies one VirtualService file. To change the weights or the mirror percentage in
+the file and apply it yourself, use the file in the table and `oc apply -f` that path. The
+object name stays `coffee-menu`. Full edits: [service-mesh.md](service-mesh.md), section 3.
+
+| Command | File | Field |
+|---|---|---|
+| `./deploy.sh app menu canary 20` | `app/deploy/patterns/menu-canary.yaml` | `weight` 80 on subset v1, 20 on v2 |
+| `./deploy.sh app menu green` | `app/deploy/patterns/menu-green.yaml` | `subset: v2` |
+| `./deploy.sh app menu blue` | `app/deploy/patterns/menu-blue.yaml` | `subset: v1` |
+| `./deploy.sh app menu mirror` | `app/deploy/patterns/menu-mirror.yaml` | `mirror.subset: v2`, `mirrorPercentage.value: 100.0` |
+
 After each switch: tab **Menu & resilience** > **Probe coffee-menu**.
 
 | Do | You see |
@@ -83,6 +167,16 @@ After each switch: tab **Menu & resilience** > **Probe coffee-menu**.
 ---
 
 ## Part D: break it on purpose (3 minutes)
+
+The fault is a block on the same VirtualService. `menu-delay.yaml` sets `fault.delay.fixedDelay`
+and `fault.delay.percentage.value`. `menu-abort.yaml` sets `fault.abort.httpStatus` (503) and
+`fault.abort.percentage.value`. Apply the file, or let the helper rewrite the percentage and apply it:
+
+```bash
+oc apply -f app/deploy/patterns/menu-delay.yaml    # 3s on 50% of calls, as committed
+oc apply -f app/deploy/patterns/menu-abort.yaml    # HTTP 503 on 30% of calls, as committed
+oc apply -f app/deploy/patterns/menu-reset.yaml    # v1, no fault
+```
 
 | Do | Raw probe | The shop |
 |---|---|---|

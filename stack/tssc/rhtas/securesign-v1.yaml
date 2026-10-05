@@ -1,0 +1,41 @@
+# Trusted Artifact Signer instance (operator 1.5+, API rhtas.redhat.com/v1). __ISSUER__ is the
+# platform Keycloak realm (filled in by tssc.sh). Keyless signing identities come from Keycloak:
+# client trusted-artifact-signer, the certificate identity is the user's verified email.
+apiVersion: rhtas.redhat.com/v1
+kind: Securesign
+metadata:
+  name: rhtas
+  namespace: trusted-artifact-signer
+  labels:
+    app.kubernetes.io/part-of: trusted-artifact-signer
+spec:
+  fulcio:
+    ingress:
+      enabled: true
+    config:
+      oidcIssuers:
+        - clientID: trusted-artifact-signer
+          issuerURL: __ISSUER__
+          issuer: __ISSUER__
+          type: email
+    signer:
+      certificateChain:
+        organizationName: Platform demo
+        organizationEmail: admin@demo.example.com
+  rekor:
+    ingress:
+      enabled: true
+  tuf:
+    ingress:
+      enabled: true
+  tsa:
+    ingress:
+      enabled: true
+    signer:
+      certificateChain:
+        intermediateCA:
+          - organizationName: Platform demo
+        leafCA:
+          organizationName: Platform demo
+        rootCA:
+          organizationName: Platform demo

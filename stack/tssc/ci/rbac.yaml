@@ -1,0 +1,58 @@
+# The pipeline service account (created by OpenShift Pipelines in every namespace) may:
+#   push images to ai-demo, read ai-demo (environment checks), patch + sync the Argo CD app,
+#   and create the cosign key secret in this namespace (one-off setup Job).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tssc-image-pusher
+  namespace: ai-demo
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: system:image-pusher}
+subjects:
+  - {kind: ServiceAccount, name: pipeline, namespace: tssc-ci}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tssc-view
+  namespace: ai-demo
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: view}
+subjects:
+  - {kind: ServiceAccount, name: pipeline, namespace: tssc-ci}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tssc-argocd-sync
+  namespace: openshift-gitops
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [applications]
+    verbs: [get, list, watch, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tssc-argocd-sync
+  namespace: openshift-gitops
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: tssc-argocd-sync}
+subjects:
+  - {kind: ServiceAccount, name: pipeline, namespace: tssc-ci}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tssc-cosign-keys
+  namespace: tssc-ci
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tssc-cosign-keys
+  namespace: tssc-ci
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: tssc-cosign-keys}
+subjects:
+  - {kind: ServiceAccount, name: pipeline, namespace: tssc-ci}

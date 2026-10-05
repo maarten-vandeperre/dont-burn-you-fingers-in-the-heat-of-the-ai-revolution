@@ -66,6 +66,54 @@ Every step below has three parts: **Do**, **You see**, **Say**.
 
 ---
 
+## Part B2: show it on Kafka (4 minutes)
+
+Each captured table has its own topic, named `<prefix>.<schema>.<table>` with Debezium's prefix
+`inventory`: table `inventory.customers` becomes topic `inventory.inventory.customers`, table
+`inventory.orders` becomes `inventory.inventory.orders`. The projection-service reads both with
+consumer group `projection-service`.
+
+**K1. The topics.**
+* **Do:** in a terminal, define a small helper once:
+  ```bash
+  kafka() { local tool=$1; shift; oc exec -n kafka platform-dual-role-0 -c kafka -- /opt/kafka/bin/"$tool" --bootstrap-server localhost:9092 "$@"; }
+  ```
+  (bash and zsh; it runs the Kafka tools inside the Kafka pod)
+  ```bash
+  kafka kafka-topics.sh --list | grep -v '^__'
+  ```
+* **You see:** `inventory.inventory.customers`, `inventory.inventory.orders` (and the coffee shop's
+  `inventory.coffee.*`, demo 7). Debezium created them, one per captured table.
+
+**K2. The events.**
+* **Do:**
+  ```bash
+  kafka kafka-console-consumer.sh --topic inventory.inventory.customers --from-beginning --timeout-ms 5000 \
+    | jq -c 'select(. != null) | (.payload // .) | {op, table: .source.table, before, after}'
+  ```
+* **You see:** one line per change, with `op` (`r` for the rows of the initial snapshot, `c`
+  created, `u` updated, `d` deleted) and the complete row before and after.
+
+**K3. Watch it live.**
+* **Do:** run the consumer without `--from-beginning` and `--timeout-ms` (Ctrl+C to stop):
+  ```bash
+  kafka kafka-console-consumer.sh --topic inventory.inventory.orders \
+    | jq -c 'select(. != null) | (.payload // .) | {op, after}'
+  ```
+  In the demo UI, tab **CDC**: **Place order**.
+* **You see:** the event in the terminal within a second, and the MongoDB card updated two
+  seconds later.
+
+**K4. Consumer lag.**
+* **Do:**
+  ```bash
+  kafka kafka-consumer-groups.sh --describe --group projection-service
+  ```
+* **You see:** `CURRENT-OFFSET`, `LOG-END-OFFSET` and `LAG` per topic. Combine with A4: with the
+  projection-service scaled to 0, `LAG` grows with every order; after scaling back it returns to `0`.
+
+---
+
 ## Part C: the code and configuration in IntelliJ (5 minutes)
 
 **C1. The application only writes to its database.**

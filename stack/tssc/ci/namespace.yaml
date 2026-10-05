@@ -1,0 +1,8 @@
+# The CI namespace of the trusted software supply chain. Deliberately NOT in the service mesh:
+# pipeline pods must not get Istio sidecars. Images are pushed to the ai-demo image streams.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tssc-ci
+  labels:
+    app.kubernetes.io/part-of: trusted-software-supply-chain

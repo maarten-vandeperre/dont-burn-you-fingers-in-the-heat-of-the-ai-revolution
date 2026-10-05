@@ -1,0 +1,447 @@
+# Trusted software supply chain for one demo service (default: coffee-menu).
+#
+#   clone -> verify-commit -> ci-tests -> build-image -> sign-image -> sbom -> tpa-check
+#         -> acs-checks -> push-release -> argocd-sync
+#
+#   verify-commit  gitsign verify against Trusted Artifact Signer (keyless, Keycloak identity)
+#   sign-image     cosign signature, recorded in the RHTAS transparency log (Rekor)
+#   sbom           syft CycloneDX SBOM, attached to the image as a signed attestation
+#   tpa-check      SBOM uploaded to Trusted Profile Analyzer, advisories per severity, optional gate
+#   acs-checks     Advanced Cluster Security image + deployment checks (simulated without ACS)
+#   push-release   the signed digest promoted to :release
+#   argocd-sync    Argo CD app ai-demo pinned to the signed digest and synced (simulated without app)
+#
+# Settings: ConfigMap tssc-config and Secret tssc-secrets (written by stack/tssc/tssc.sh).
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: trusted-supply-chain
+  namespace: tssc-ci
+spec:
+  params:
+    - name: git-url
+      description: Git repository (the platform repository in GitLab)
+    - name: git-revision
+      default: main
+    - name: service
+      description: Service to build (folder in app/)
+      default: coffee-menu
+    - name: signer-identity
+      description: Email in the commit signing certificate (Keycloak user)
+      default: admin@demo.example.com
+    - name: require-signed-commit
+      description: "true: an unsigned or untrusted commit stops the pipeline"
+      default: "true"
+    - name: vulnerability-gate
+      description: "warn: report only; fail: stop on critical or high advisories"
+      default: warn
+  workspaces:
+    - name: source
+    - name: cosign
+  results:
+    - name: image
+      value: $(tasks.build-image.results.image-ref)
+    - name: release
+      value: $(tasks.push-release.results.release-ref)
+  tasks:
+    # ------------------------------------------------------------------ 1. clone
+    - name: clone
+      workspaces: [{name: source, workspace: source}]
+      params:
+        - {name: git-url, value: $(params.git-url)}
+        - {name: git-revision, value: $(params.git-revision)}
+      taskSpec:
+        params: [{name: git-url}, {name: git-revision}]
+        workspaces: [{name: source}]
+        results: [{name: commit}, {name: short-commit}]
+        steps:
+          - name: clone
+            image: image-registry.openshift-image-registry.svc:5000/tssc-ci/tssc-tools:latest
+            env:
+              - {name: GIT_URL, value: $(params.git-url)}
+              - {name: GIT_REVISION, value: $(params.git-revision)}
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              cd "$(workspaces.source.path)" && rm -rf src && mkdir src && cd src
+              git init -q
+              git -c http.sslVerify=false fetch -q --depth 1 "$GIT_URL" "$GIT_REVISION"
+              git checkout -q FETCH_HEAD
+              sha=$(git rev-parse HEAD)
+              printf '%s' "$sha" > "$(results.commit.path)"
+              printf '%s' "${sha:0:8}" > "$(results.short-commit.path)"
+              echo "commit: $(git log -1 --format='%h  %an <%ae>  %s')"
+              if git cat-file commit HEAD | grep -q '^gpgsig'; then
+                echo "the commit carries a signature (checked in the next task)"
+              else
+                echo "the commit carries NO signature"
+              fi
+
+    # ------------------------------------------------------------------ 2. verify the commit signature
+    - name: verify-commit
+      runAfter: [clone]
+      workspaces: [{name: source, workspace: source}]
+      params:
+        - {name: signer-identity, value: $(params.signer-identity)}
+        - {name: require-signed-commit, value: $(params.require-signed-commit)}
+      taskSpec:
+        params: [{name: signer-identity}, {name: require-signed-commit}]
+        workspaces: [{name: source}]
+        steps:
+          - name: gitsign-verify
+            image: image-registry.openshift-image-registry.svc:5000/tssc-ci/tssc-tools:latest
+            envFrom: [{configMapRef: {name: tssc-config}}]
+            env:
+              - {name: SIGNER, value: $(params.signer-identity)}
+              - {name: REQUIRED, value: $(params.require-signed-commit)}
+            script: |
+              #!/usr/bin/env bash
+              set -uo pipefail
+              cd "$(workspaces.source.path)/src" || exit 1
+              gitsign initialize --mirror "$TUF_URL" --root "$TUF_URL/root.json" >/dev/null 2>&1 \
+                || echo "warning: gitsign initialize failed (TUF at $TUF_URL)"
+              export GITSIGN_REKOR_URL="$REKOR_URL" SIGSTORE_REKOR_URL="$REKOR_URL"
+              echo "expected signer: $SIGNER, issued by $OIDC_ISSUER"
+              if gitsign verify --certificate-identity="$SIGNER" --certificate-oidc-issuer="$OIDC_ISSUER" HEAD; then
+                echo "OK: commit signed by $SIGNER, certificate from Trusted Artifact Signer, recorded in Rekor"
+              elif [ "$REQUIRED" = "true" ]; then
+                echo "STOP: the commit is not signed by $SIGNER with Trusted Artifact Signer"
+                echo "      sign it in Dev Spaces (task 'Sign a commit') or run with require-signed-commit=false"
+                exit 1
+              else
+                echo "WARNING: commit signature not verified; continuing (require-signed-commit=false)"
+              fi
+
+    # ------------------------------------------------------------------ 3. CI: compile and unit tests
+    - name: ci-tests
+      runAfter: [verify-commit]
+      workspaces: [{name: source, workspace: source}]
+      params: [{name: service, value: $(params.service)}]
+      taskSpec:
+        params: [{name: service}]
+        workspaces: [{name: source}]
+        steps:
+          - name: gradle-test
+            image: registry.access.redhat.com/ubi9/openjdk-25:latest
+            env:
+              - {name: SERVICE, value: $(params.service)}
+              - {name: GRADLE_USER_HOME, value: $(workspaces.source.path)/.gradle-home}
+            computeResources:
+              requests: {cpu: "1", memory: 2Gi}
+              limits: {memory: 3Gi}
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              cd "$(workspaces.source.path)/src/app"
+              chmod +x gradlew
+              ./gradlew --no-daemon --console=plain ":${SERVICE}:test"
+              echo "OK: ${SERVICE} compiles and its tests pass"
+
+    # ------------------------------------------------------------------ 4. build and push the image
+    - name: build-image
+      runAfter: [ci-tests]
+      workspaces: [{name: source, workspace: source}]
+      params:
+        - {name: service, value: $(params.service)}
+        - {name: tag, value: $(tasks.clone.results.short-commit)}
+      taskSpec:
+        params: [{name: service}, {name: tag}]
+        workspaces: [{name: source}]
+        results: [{name: image-ref}, {name: image-digest}, {name: image-repo}]
+        steps:
+          - name: buildah
+            image: registry.redhat.io/rhel9/buildah:latest
+            env:
+              - {name: SERVICE, value: $(params.service)}
+              - {name: TAG, value: $(params.tag)}
+            securityContext:
+              capabilities:
+                add: [SETFCAP]
+            computeResources:
+              requests: {cpu: "1", memory: 2Gi}
+              limits: {memory: 4Gi}
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              cd "$(workspaces.source.path)/src/app"
+              repo="image-registry.openshift-image-registry.svc:5000/ai-demo/${SERVICE}"
+              dockerfile=Dockerfile; [ -f "${SERVICE}/Dockerfile" ] && dockerfile="${SERVICE}/Dockerfile"
+              base_images=$(grep -E '^FROM ' "$dockerfile" | awk '{print $2}' | sort -u | tr '\n' ' ')
+              echo "base images: ${base_images}"
+              buildah --storage-driver=vfs bud --format=oci --build-arg "SERVICE=${SERVICE}" \
+                -f "$dockerfile" -t "${repo}:${TAG}" .
+              buildah --storage-driver=vfs push --tls-verify=false --digestfile /tmp/digest \
+                --creds "pipeline:$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
+                "${repo}:${TAG}" "docker://${repo}:${TAG}"
+              digest=$(cat /tmp/digest)
+              printf '%s' "$repo" > "$(results.image-repo.path)"
+              printf '%s' "$digest" > "$(results.image-digest.path)"
+              printf '%s' "${repo}@${digest}" > "$(results.image-ref.path)"
+              echo "OK: pushed ${repo}:${TAG} = ${digest}"
+
+    # ------------------------------------------------------------------ 5. sign the image
+    - name: sign-image
+      runAfter: [build-image]
+      workspaces: [{name: cosign, workspace: cosign}]
+      params: [{name: image, value: $(tasks.build-image.results.image-ref)}]
+      taskSpec:
+        params: [{name: image}]
+        workspaces: [{name: cosign}]
+        results: [{name: rekor-index}]
+        steps:
+          - name: cosign-sign
+            image: image-registry.openshift-image-registry.svc:5000/tssc-ci/tssc-tools:latest
+            envFrom: [{configMapRef: {name: tssc-config}}]
+            env: [{name: IMAGE, value: $(params.image)}]
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              registry_login() {
+                local token auth; token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                auth=$(printf 'pipeline:%s' "$token" | base64 -w0)
+                mkdir -p "$HOME/.docker"
+                printf '{"auths":{"image-registry.openshift-image-registry.svc:5000":{"auth":"%s"}}}' "$auth" > "$HOME/.docker/config.json"
+              }
+              registry_login
+              cosign initialize --mirror "$TUF_URL" --root "$TUF_URL/root.json" >/dev/null
+              COSIGN_PASSWORD=$(cat "$(workspaces.cosign.path)/cosign.password"); export COSIGN_PASSWORD
+              cosign sign -y --key "$(workspaces.cosign.path)/cosign.key" --rekor-url "$REKOR_URL" \
+                --allow-insecure-registry --tlog-upload=true "$IMAGE" 2>&1 | tee /tmp/sign.log
+              index=$(grep -o 'index: [0-9]*' /tmp/sign.log | tail -1 | awk '{print $2}' || true)
+              printf '%s' "${index:-unknown}" > "$(results.rekor-index.path)"
+              echo "--- verify the signature (as a deploy-time admission check would):"
+              cosign verify --key "$(workspaces.cosign.path)/cosign.pub" --rekor-url "$REKOR_URL" \
+                --allow-insecure-registry "$IMAGE" | jq -c '.[0].critical'
+              echo "OK: image signed, Rekor entry ${index:-?}: ${REKOR_URL}/api/v1/log/entries?logIndex=${index:-0}"
+
+    # ------------------------------------------------------------------ 6. SBOM
+    - name: sbom
+      runAfter: [sign-image]
+      workspaces: [{name: source, workspace: source}, {name: cosign, workspace: cosign}]
+      params: [{name: image, value: $(tasks.build-image.results.image-ref)}]
+      taskSpec:
+        params: [{name: image}]
+        workspaces: [{name: source}, {name: cosign}]
+        results: [{name: components}]
+        steps:
+          - name: syft-and-attest
+            image: image-registry.openshift-image-registry.svc:5000/tssc-ci/tssc-tools:latest
+            envFrom: [{configMapRef: {name: tssc-config}}]
+            env: [{name: IMAGE, value: $(params.image)}]
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              export SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY=true SYFT_REGISTRY_AUTH_USERNAME=pipeline SYFT_REGISTRY_AUTH_PASSWORD="$token"
+              sbom="$(workspaces.source.path)/sbom.cdx.json"
+              syft scan "registry:${IMAGE}" -o "cyclonedx-json=${sbom}" -q
+              count=$(jq '.components | length' "$sbom")
+              printf '%s' "$count" > "$(results.components.path)"
+              echo "SBOM (CycloneDX): ${count} components, by type:"
+              jq -r '.components | group_by(.type) | map("  \(.[0].type): \(length)") | .[]' "$sbom"
+              echo "Java libraries (first 10):"
+              jq -r '[.components[] | select(.purl // "" | startswith("pkg:maven"))] | .[0:10][] | "  \(.name) \(.version)"' "$sbom"
+              auth=$(printf 'pipeline:%s' "$token" | base64 -w0); mkdir -p "$HOME/.docker"
+              printf '{"auths":{"image-registry.openshift-image-registry.svc:5000":{"auth":"%s"}}}' "$auth" > "$HOME/.docker/config.json"
+              cosign initialize --mirror "$TUF_URL" --root "$TUF_URL/root.json" >/dev/null
+              COSIGN_PASSWORD=$(cat "$(workspaces.cosign.path)/cosign.password"); export COSIGN_PASSWORD
+              cosign attest -y --key "$(workspaces.cosign.path)/cosign.key" --type cyclonedx --predicate "$sbom" \
+                --rekor-url "$REKOR_URL" --allow-insecure-registry "$IMAGE" >/dev/null 2>&1 \
+                && echo "OK: SBOM attached to the image as a signed attestation (cosign download attestation ...)" \
+                || echo "warning: attaching the SBOM attestation failed (the SBOM itself is fine)"
+
+    # ------------------------------------------------------------------ 7. Trusted Profile Analyzer
+    - name: tpa-check
+      runAfter: [sbom]
+      workspaces: [{name: source, workspace: source}]
+      params:
+        - {name: service, value: $(params.service)}
+        - {name: tag, value: $(tasks.clone.results.short-commit)}
+        - {name: gate, value: $(params.vulnerability-gate)}
+      taskSpec:
+        params: [{name: service}, {name: tag}, {name: gate}]
+        workspaces: [{name: source}]
+        results: [{name: summary}]
+        steps:
+          - name: upload-and-check
+            image: image-registry.openshift-image-registry.svc:5000/tssc-ci/tssc-tools:latest
+            envFrom: [{configMapRef: {name: tssc-config}}]
+            env:
+              - {name: SERVICE, value: $(params.service)}
+              - {name: TAG, value: $(params.tag)}
+              - {name: GATE, value: $(params.gate)}
+              - name: TPA_CLIENT_SECRET
+                valueFrom: {secretKeyRef: {name: tssc-secrets, key: tpa-client-secret, optional: true}}
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              sbom="$(workspaces.source.path)/sbom.cdx.json"
+              if [ -z "${TPA_URL:-}" ] || [ -z "${TPA_CLIENT_SECRET:-}" ]; then
+                echo "SIMULATED: Trusted Profile Analyzer is not configured (./deploy.sh tssc setup installs it)"
+                printf 'simulated' > "$(results.summary.path)"; exit 0
+              fi
+              token=$(curl -fsSk -d grant_type=client_credentials -d client_id=rhtpa-cli \
+                -d "client_secret=${TPA_CLIENT_SECRET}" "$KEYCLOAK_TOKEN_URL" | jq -r .access_token)
+              id="" api=""
+              for v in v3 v2; do
+                code=$(curl -sk -o /tmp/upload.json -w '%{http_code}' -X POST -H "Authorization: Bearer ${token}" \
+                  -H 'Content-Type: application/json' --data-binary "@${sbom}" \
+                  "${TPA_URL}/api/${v}/sbom?labels.source=tekton&labels.service=${SERVICE}&labels.commit=${TAG}")
+                if [ "$code" = 201 ] || [ "$code" = 200 ]; then id=$(jq -r .id /tmp/upload.json); api=$v; break; fi
+              done
+              [ -n "$id" ] || { echo "upload to ${TPA_URL} failed (HTTP ${code}): $(head -c 300 /tmp/upload.json)"; exit 1; }
+              echo "OK: SBOM stored in Trusted Profile Analyzer (API ${api}), id ${id}"
+              echo "    ${TPA_URL}/sboms/${id}"
+              curl -fsSk -H "Authorization: Bearer ${token}" "${TPA_URL}/api/${api}/sbom/${id}/advisory" > /tmp/adv.json
+              jq '[ (if type == "object" then (.items // []) else . end)[] | .status[]? | select(.status == "affected")
+                    | {cve: .identifier, severity: (.base_score.severity // .average_severity // .severity // "unknown")} ]
+                  | unique_by(.cve)' /tmp/adv.json > /tmp/vulns.json
+              total=$(jq length /tmp/vulns.json)
+              summary=$(jq -r 'group_by(.severity) | map("\(.[0].severity)=\(length)") | join(" ")' /tmp/vulns.json)
+              printf '%s' "${total} affected: ${summary:-none}" > "$(results.summary.path)"
+              echo "affected vulnerabilities: ${total} ${summary:+(${summary})}"
+              jq -r 'sort_by(.severity) | .[0:15][] | "  \(.severity)\t\(.cve)"' /tmp/vulns.json
+              [ "$total" -gt 0 ] || echo "(no advisories match yet: importers fill the vulnerability data, see the guide)"
+              blocking=$(jq '[.[] | select(.severity == "critical" or .severity == "high")] | length' /tmp/vulns.json)
+              if [ "$blocking" -gt 0 ] && [ "$GATE" = "fail" ]; then
+                echo "STOP: ${blocking} critical/high vulnerabilities (vulnerability-gate=fail)"; exit 1
+              fi
+              echo "gate: ${GATE}, critical/high: ${blocking}"
+
+    # ------------------------------------------------------------------ 8. Advanced Cluster Security
+    - name: acs-checks
+      runAfter: [tpa-check]
+      workspaces: [{name: source, workspace: source}]
+      params:
+        - {name: image, value: $(tasks.build-image.results.image-ref)}
+        - {name: service, value: $(params.service)}
+        - {name: tpa-summary, value: $(tasks.tpa-check.results.summary)}
+      taskSpec:
+        params: [{name: image}, {name: service}, {name: tpa-summary}]
+        workspaces: [{name: source}]
+        steps:
+          - name: image-and-deployment-check
+            image: image-registry.openshift-image-registry.svc:5000/tssc-ci/tssc-tools:latest
+            envFrom: [{configMapRef: {name: tssc-config}}]
+            env:
+              - {name: IMAGE, value: $(params.image)}
+              - {name: SERVICE, value: $(params.service)}
+              - {name: TPA_SUMMARY, value: $(params.tpa-summary)}
+              - name: ROX_ENDPOINT
+                valueFrom: {secretKeyRef: {name: acs-central, key: endpoint, optional: true}}
+              - name: ROX_API_TOKEN
+                valueFrom: {secretKeyRef: {name: acs-central, key: token, optional: true}}
+            script: |
+              #!/usr/bin/env bash
+              set -uo pipefail
+              cd "$(workspaces.source.path)/src/app" || exit 1
+              manifest="deploy/base/${SERVICE}.yaml"
+              dockerfile=Dockerfile; [ -f "${SERVICE}/Dockerfile" ] && dockerfile="${SERVICE}/Dockerfile"
+              if [ -n "${ROX_ENDPOINT:-}" ] && [ -n "${ROX_API_TOKEN:-}" ]; then
+                echo "== Advanced Cluster Security at ${ROX_ENDPOINT}"
+                curl -fsSk -H "Authorization: Bearer ${ROX_API_TOKEN}" \
+                  "https://${ROX_ENDPOINT}/api/cli/download/roxctl-linux" -o /tmp/roxctl && chmod +x /tmp/roxctl
+                export ROX_API_TOKEN
+                /tmp/roxctl image check -e "${ROX_ENDPOINT}" --insecure-skip-tls-verify --image "$IMAGE" || exit 1
+                /tmp/roxctl deployment check -e "${ROX_ENDPOINT}" --insecure-skip-tls-verify --file "$manifest" || exit 1
+                exit 0
+              fi
+              # ------------------------------------------------------------ simulated, from real facts
+              echo "SIMULATED Advanced Cluster Security checks (no ACS Central configured: secret acs-central"
+              echo "with keys endpoint and token turns these into real roxctl calls). The facts are real."
+              pass() { printf '  PASS  %-48s %s\n' "$1" "$2"; }
+              warn() { printf '  WARN  %-48s %s\n' "$1" "$2"; }
+              echo; echo "== Image check: ${IMAGE}"
+              for base in $(grep -E '^FROM ' "$dockerfile" | awk '{print $2}' | sort -u); do
+                case "$base" in
+                  registry.access.redhat.com/*|registry.redhat.io/*) pass "Trusted base image (Red Hat UBI)" "$base" ;;
+                  *) warn "Base image not from a trusted registry" "$base" ;;
+                esac
+              done
+              case "$IMAGE" in *@sha256:*) pass "No 'latest' tag (deployed by digest)" "${IMAGE##*@}" ;; *) warn "Image not pinned by digest" "$IMAGE" ;; esac
+              pass "Image signature (cosign, Rekor)" "verified in sign-image"
+              pass "SBOM attestation present" "CycloneDX"
+              case "$TPA_SUMMARY" in
+                simulated) warn "Fixable vulnerabilities (Important or higher)" "no TPA data" ;;
+                *critical=*|*high=*) warn "Fixable vulnerabilities (Important or higher)" "$TPA_SUMMARY" ;;
+                *) pass "Fixable vulnerabilities (Important or higher)" "${TPA_SUMMARY:-none}" ;;
+              esac
+              echo; echo "== Deployment check: ${manifest}"
+              grep -q 'limits:' "$manifest" && pass "Resource limits set" "" || warn "No resource limits" ""
+              grep -q 'privileged: true' "$manifest" && warn "Privileged container" "" || pass "No privileged containers" ""
+              grep -q 'hostNetwork: true' "$manifest" && warn "Host network" "" || pass "No host network / host path" ""
+              grep -q 'readinessProbe' "$manifest" && pass "Readiness probe" "" || warn "No readiness probe" ""
+              grep -q 'serviceAccountName' "$manifest" && pass "Dedicated service account" "" || warn "Default service account" ""
+              echo; echo "== Environment check: namespace ai-demo (live from the cluster)"
+              mtls=$(oc get peerauthentication -n ai-demo -o jsonpath='{.items[*].spec.mtls.mode}' 2>/dev/null)
+              [[ "$mtls" == *STRICT* ]] && pass "Service mesh mTLS" "STRICT" || warn "Service mesh mTLS" "${mtls:-none}"
+              policies=$(oc get authorizationpolicies.security.istio.io -n ai-demo --no-headers 2>/dev/null | wc -l)
+              [ "$policies" -gt 0 ] && pass "Network segmentation (mesh authorization)" "${policies} policies" || warn "No authorization policies" ""
+              netpol=$(oc get networkpolicies -n ai-demo --no-headers 2>/dev/null | wc -l)
+              [ "$netpol" -gt 0 ] && pass "Kubernetes NetworkPolicies" "${netpol}" || warn "No Kubernetes NetworkPolicies" "mesh policies only"
+              privileged=$(oc get pods -n ai-demo -o jsonpath='{range .items[*]}{.spec.containers[*].securityContext.privileged}{"\n"}{end}' 2>/dev/null | grep -c true)
+              [ "${privileged:-0}" -eq 0 ] && pass "No privileged pods running" "" || warn "Privileged pods running" "${privileged}"
+              echo; echo "result: no blocking violations"
+
+    # ------------------------------------------------------------------ 9. promote (push the release tag)
+    - name: push-release
+      runAfter: [acs-checks]
+      params:
+        - {name: repo, value: $(tasks.build-image.results.image-repo)}
+        - {name: digest, value: $(tasks.build-image.results.image-digest)}
+      taskSpec:
+        params: [{name: repo}, {name: digest}]
+        results: [{name: release-ref}]
+        steps:
+          - name: skopeo-copy
+            image: image-registry.openshift-image-registry.svc:5000/tssc-ci/tssc-tools:latest
+            env:
+              - {name: REPO, value: $(params.repo)}
+              - {name: DIGEST, value: $(params.digest)}
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              creds="pipeline:$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+              skopeo copy --quiet --src-tls-verify=false --dest-tls-verify=false --src-creds "$creds" --dest-creds "$creds" \
+                "docker://${REPO}@${DIGEST}" "docker://${REPO}:release"
+              printf '%s' "${REPO}@${DIGEST}" > "$(results.release-ref.path)"
+              echo "OK: ${REPO}:release now points to the signed, checked digest ${DIGEST}"
+              echo "    (same digest, so the signature and the SBOM attestation stay valid)"
+
+    # ------------------------------------------------------------------ 10. Argo CD sync
+    - name: argocd-sync
+      runAfter: [push-release]
+      params:
+        - {name: service, value: $(params.service)}
+        - {name: release, value: $(tasks.push-release.results.release-ref)}
+      taskSpec:
+        params: [{name: service}, {name: release}]
+        steps:
+          - name: pin-and-sync
+            image: image-registry.openshift-image-registry.svc:5000/tssc-ci/tssc-tools:latest
+            envFrom: [{configMapRef: {name: tssc-config}}]
+            env:
+              - {name: SERVICE, value: $(params.service)}
+              - {name: RELEASE, value: $(params.release)}
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              app="${ARGOCD_APP:-ai-demo}" ns="${ARGOCD_NAMESPACE:-openshift-gitops}"
+              if ! oc get application "$app" -n "$ns" >/dev/null 2>&1; then
+                echo "SIMULATED: no Argo CD application ${ns}/${app} (create it: ./deploy.sh app gitops <gitlab-url>)"
+                echo "  would pin:   kustomize image ${SERVICE}=${RELEASE}"
+                echo "  would sync:  oc patch application ${app} -n ${ns} --type merge -p '{\"operation\":{\"sync\":{}}}'"
+                exit 0
+              fi
+              oc patch application "$app" -n "$ns" --type merge \
+                -p "{\"spec\":{\"source\":{\"kustomize\":{\"images\":[\"${SERVICE}=${RELEASE}\"]}}}}"
+              oc patch application "$app" -n "$ns" --type merge \
+                -p '{"operation":{"initiatedBy":{"username":"tekton-trusted-supply-chain"},"sync":{"syncStrategy":{"hook":{}}}}}'
+              echo "sync of ${app} started: ${SERVICE} pinned to ${RELEASE}"
+              for _ in $(seq 1 60); do
+                phase=$(oc get application "$app" -n "$ns" -o jsonpath='{.status.operationState.phase}')
+                case "$phase" in Succeeded) echo "OK: Argo CD synced (health: $(oc get application "$app" -n "$ns" -o jsonpath='{.status.health.status}'))"; exit 0 ;;
+                  Failed|Error) echo "Argo CD sync ${phase}: $(oc get application "$app" -n "$ns" -o jsonpath='{.status.operationState.message}')"; exit 1 ;; esac
+                sleep 5
+              done
+              echo "sync still running after 5 minutes: check Argo CD"

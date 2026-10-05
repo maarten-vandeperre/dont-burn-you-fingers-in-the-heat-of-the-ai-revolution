@@ -103,6 +103,14 @@ installs automatically.
 **OpenAI key later:** `OPENAI_API_KEY=sk-... ./deploy.sh app setup`, then
 `oc rollout restart deploy/model-router -n ai-demo`.
 
+### 2b. Optional: the trusted software supply chain (30 minutes)
+
+```bash
+./deploy.sh tssc setup     # Trusted Artifact Signer, Trusted Profile Analyzer (needs helm), Dev Spaces, pipeline
+./deploy.sh tssc run       # signed commit -> verify -> CI -> sign -> SBOM -> TPA -> ACS -> release -> Argo CD
+```
+Details: `stack/tssc/README.md`; demo: `docs/demos/08-trusted-software-supply-chain.md`.
+
 ### 3. Check everything
 
 ```bash
@@ -150,6 +158,8 @@ See `app/README.md` for the architecture, and **[docs/demos](docs/demos/README.m
 a [platform tour](docs/demos/00-platform-tour.md) of every UI, a [test checklist](docs/demos/testing.md)
 with expected results, and seven demos (models and RAG, mesh security, deployment patterns, CDC,
 observability, Developer Hub, Platform Coffee), each with a UI walkthrough and test commands.
+[Service mesh manifests](docs/demos/service-mesh.md) is the mesh demos with the YAML field and the
+`oc apply` for each change.
 
 ## Developer Hub: everything visible and manageable
 
@@ -274,6 +284,7 @@ stack/
   operators/               all operator subscriptions of the stack (+ ../../operators)
   rhoai/                   MLflow instance
   tracing/                 Tempo, OpenTelemetry collector, console tracing plugin
+  tssc/                    trusted software supply chain: RHTAS, RHTPA, Dev Spaces, signing pipeline (./deploy.sh tssc)
   servicemesh/             Istio, Istio CNI, Telemetry, Kiali, monitoring, demo/ (Bookinfo)
   kafka/                   Kafka (KRaft), Kafka Connect + Debezium, demo database, connector
   developer-hub/           Backstage instance, app-config (Keycloak sign-in, GitLab), catalog, templates

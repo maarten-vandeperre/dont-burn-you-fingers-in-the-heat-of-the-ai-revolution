@@ -1,0 +1,45 @@
+# The tools image every pipeline step uses: git, jq, skopeo, oc, syft and the Sigstore clients
+# (cosign, gitsign, rekor-cli, ec) downloaded from the RHTAS CLI server of THIS cluster, so the
+# clients always match the server. tssc.sh sets CLI_SERVER and starts the build.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: tssc-tools
+  namespace: tssc-ci
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: tssc-tools
+  namespace: tssc-ci
+spec:
+  source:
+    type: Dockerfile
+    dockerfile: |
+      FROM registry.access.redhat.com/ubi9/ubi:latest
+      ARG CLI_SERVER
+      ARG SYFT_VERSION=1.54.0
+      RUN dnf -y install --setopt=install_weak_deps=False git-core jq skopeo tar gzip findutils \
+       && dnf clean all
+      RUN set -eu; arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/'); \
+          for tool in cosign gitsign rekor-cli ec; do \
+            if curl -fsSLk "${CLI_SERVER}/clients/linux/${tool}-${arch}.gz" -o "/tmp/${tool}.gz"; then \
+              gunzip -f "/tmp/${tool}.gz" && install -m 0755 "/tmp/${tool}" "/usr/local/bin/${tool}"; \
+            else echo "not on the CLI server: ${tool}"; fi; \
+          done; \
+          command -v cosign && command -v gitsign; \
+          curl -fsSL "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${arch}.tar.gz" \
+            | tar -xz -C /usr/local/bin syft; \
+          curl -fsSL "http://downloads.openshift-console.svc.cluster.local/${arch}/linux/oc.tar" | tar -x -C /usr/local/bin oc; \
+          cosign version | head -3; gitsign --version | head -1; syft version | head -2; oc version --client
+      ENV HOME=/tmp
+  strategy:
+    type: Docker
+    dockerStrategy:
+      buildArgs:
+        - name: CLI_SERVER
+          value: https://cli-server.CHANGE-ME
+  output:
+    to:
+      kind: ImageStreamTag
+      name: tssc-tools:latest
