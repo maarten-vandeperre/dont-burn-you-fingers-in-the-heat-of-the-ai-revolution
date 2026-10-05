@@ -22,7 +22,7 @@ Every step below has three parts: **Do** (what you click or open), **You see** (
 
 ## Before you start
 
-1. In a terminal in the repository folder:
+1. In a terminal in the app repository folder (/app):
    ```bash
    ./deploy.sh app probe     # five lines, all starting with OK
    ./deploy.sh urls          # Kiali and console URLs

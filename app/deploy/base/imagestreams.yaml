@@ -1,4 +1,7 @@
-# Built by demo.sh build (binary builds) or the Tekton pipeline. lookupPolicy.local lets pods use 'name:tag'.
+# Built by demo.sh build (binary builds) or the Tekton pipeline.
+# lookupPolicy.local resolves name:tag only for callers who can get the ImageStream.
+# Deployments are created by the replica-set controller, which cannot, so each Deployment
+# also carries an image.openshift.io/triggers annotation that pins the internal registry digest.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:

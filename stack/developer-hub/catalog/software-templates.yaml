@@ -8,4 +8,4 @@ metadata:
 spec:
   type: url
   targets:
-    - https://gitlab-gitlab.apps.CHANGE-ME.example.com/ai-platform/platform/-/blob/main/app/software-templates/llm-app/template.yaml
+    - https://gitlab-gitlab.apps.cluster-ljzqb.dyn.redhatworkshops.io/ai-platform/platform/-/blob/main/app/software-templates/llm-app/template.yaml

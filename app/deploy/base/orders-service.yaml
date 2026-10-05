@@ -24,6 +24,8 @@ metadata:
     app.kubernetes.io/part-of: ai-demo
     backstage.io/kubernetes-id: orders-service
     app.openshift.io/runtime: quarkus
+  annotations:
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"orders-service:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"app\")].image"}]'
 spec:
   replicas: 1
   selector:
