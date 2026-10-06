@@ -24,18 +24,18 @@
         path: /chat/{provider}
         consumes: application/json
         produces: application/json
-        to: direct:chat
+        to: direct:rest-chat
       - id: post-chat
         path: /chat
         consumes: application/json
         produces: application/json
-        to: direct:chat
+        to: direct:rest-chat
 
 - route:
     id: chat
     description: Canonical entry point, picks the provider route; errors become a JSON answer (HTTP 502)
     from:
-      uri: direct:chat
+      uri: direct:rest-chat
       steps:
         - setVariable:
             name: provider
@@ -217,7 +217,22 @@
       uri: direct:providers
       steps:
         - setBody:
-            simple: '{"auto": "qwen, fallback {{llm.fallback}} after {{llm.local-timeout-ms}} ms", "qwen": {"url": "{{qwen.base-url}}", "model": "{{qwen.model}}"}, "openai": {"url": "{{openai.base-url}}", "model": "{{openai.model}}"}, "anthropic": {"url": "{{anthropic.base-url}}", "model": "{{anthropic.model}}"}}'
+            constant: |
+              {
+                "auto": "qwen, fallback {{llm.fallback}} after {{llm.local-timeout-ms}} ms",
+                "qwen": {
+                  "url": "{{qwen.base-url}}",
+                  "model": "{{qwen.model}}"
+                },
+                "openai": {
+                  "url": "{{openai.base-url}}",
+                  "model": "{{openai.model}}"
+                },
+                "anthropic": {
+                  "url": "{{anthropic.base-url}}",
+                  "model": "{{anthropic.model}}"
+                }
+              }
         - removeHeaders:
             pattern: "*"
         - setHeader:
