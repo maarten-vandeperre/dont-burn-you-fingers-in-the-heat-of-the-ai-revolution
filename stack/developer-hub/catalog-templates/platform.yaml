@@ -189,3 +189,53 @@ spec:
   type: source-control
   owner: platform-team
   system: openshift-platform
+---
+# Trusted software supply chain (demo 8): Sigstore for the company. See coffee-menu-tssc
+# (system ai-demo) for the pipeline that uses these services.
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: trusted-artifact-signer
+  title: Red Hat Trusted Artifact Signer
+  description: >-
+    Sigstore, run by us: Fulcio issues short-lived certificates for Keycloak identities (keyless
+    commit and image signing), Rekor is the transparency log, TUF distributes the trust root.
+  annotations:
+    backstage.io/kubernetes-namespace: trusted-artifact-signer
+  links:
+    - {url: "https://console-openshift-console.__APPS_DOMAIN__/k8s/ns/trusted-artifact-signer/rhtas.redhat.com~v1~Securesign/rhtas", title: Securesign resource}
+  tags: [sigstore, fulcio, rekor, tuf, cosign, gitsign, rhtas]
+spec:
+  type: trust-service
+  owner: platform-team
+  system: openshift-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: trusted-profile-analyzer
+  title: Red Hat Trusted Profile Analyzer
+  description: SBOM store and vulnerability analysis; every SBOM from the pipeline lands here with its CVEs
+  annotations:
+    backstage.io/kubernetes-namespace: trusted-profile-analyzer
+  tags: [sbom, cve, vulnerability-management, rhtpa]
+spec:
+  type: trust-service
+  owner: platform-team
+  system: openshift-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: dev-spaces
+  title: OpenShift Dev Spaces
+  description: Browser IDE where developers sign commits with gitsign against Trusted Artifact Signer
+  annotations:
+    backstage.io/kubernetes-namespace: openshift-devspaces
+  links:
+    - {url: "__DEVSPACES_URL__", title: "Open Dev Spaces", icon: web}
+  tags: [devspaces, eclipse-che]
+spec:
+  type: ide
+  owner: platform-team
+  system: openshift-platform

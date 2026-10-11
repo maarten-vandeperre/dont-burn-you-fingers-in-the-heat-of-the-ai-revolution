@@ -1,6 +1,43 @@
 # The tools image every pipeline step uses: git, jq, skopeo, oc, syft and the Sigstore clients
 # (cosign, gitsign, rekor-cli, ec) downloaded from the RHTAS CLI server of THIS cluster, so the
 # clients always match the server. tssc.sh sets CLI_SERVER and starts the build.
+#
+# Some RHTAS operator versions (confirmed: 1.5.0) don't ship a CLI server route at all, so
+# CLI_SERVER can legitimately be empty. In that case this build falls back to fetching cosign
+# and rekor-cli straight from their upstream sigstore GitHub releases instead (same clients, just
+# not guaranteed to match this cluster's RHTAS server version). "ec" has no such fallback (it
+# isn't on a stable, version-less GitHub release URL and nothing in pipeline.yaml actually calls
+# it yet) and is skipped with a warning when CLI_SERVER is empty.
+#
+# cosign is pinned to the latest 2.x release (not "latest", which now resolves to a 3.x release)
+# because cosign v3 changed how it stores signatures/attestations: it always pushes them as an
+# OCI 1.1 "referrers" image index with a `subject` field. OpenShift's internal registry's
+# ImageStreamMapping validation unconditionally requires `architecture`/`os` on every image index
+# it accepts, which a signature-only index doesn't have, so every v3 `cosign sign`/`attest` push
+# fails with "dockerImageManifests[0].architecture: Required value" (confirmed: neither
+# --registry-referrers-mode=legacy nor COSIGN_DOCKER_MEDIA_TYPES=1 change this -- the OCI index
+# wrapper itself is unconditional in v3). cosign 2.x still pushes the older, flatter manifest
+# that pipeline.yaml's --rekor-url/--tlog-upload flags expect, and was confirmed working directly
+# against this cluster's registry. Revisit this pin once the registry (or cosign) adds proper
+# OCI 1.1 referrers support without requiring architecture/os.
+#
+# gitsign is special-cased: upstream prebuilt gitsign releases (confirmed still true as of the
+# actual latest release, v0.17.1) embed a permanently stale TUF trust root for Rekor's public-key
+# bootstrap (sigstore/sigstore's legacy pkg/tuf client -- a different, separate code path from
+# the modern sigstore-go client that `gitsign initialize --mirror` configures). That embedded
+# root's own "expires" field is already in the past (confirmed stale on upstream's current main
+# branch too, not just an old pin), so every `gitsign sign` / `gitsign verify-commit` fails
+# outright with "tuf: failed to decode root.json: expired ..." before it ever touches the
+# network, regardless of GITSIGN_ENABLE_SIGSTORE_GO or which TUF mirror gitsign was initialized
+# against. There is no flag or env var that redirects this specific legacy client to a custom
+# mirror. The fix: build gitsign from source with this cluster's own (non-expired, correctly
+# RHTAS-keyed) root.json -- fetched from TUF_URL at build time -- embedded in place of the stale
+# upstream default. This keeps Rekor-pubkey bootstrapping fully air-gapped: `remote.json` (written
+# by `gitsign initialize --mirror`) already points this legacy client at TUF_URL, so embedding
+# *our own* mirror's root as the bootstrap trust anchor lets it validate TUF_URL's live metadata
+# correctly -- confirmed empirically; embedding a fresh/current *public* sigstore.dev root instead
+# was also tried and fails differently ("valid signatures did not meet threshold"), because
+# TUF_URL's metadata is signed with this cluster's own distinct RHTAS keys, not sigstore.dev's.
 apiVersion: image.openshift.io/v1
 kind: ImageStream
 metadata:
@@ -18,20 +55,53 @@ spec:
     dockerfile: |
       FROM registry.access.redhat.com/ubi9/ubi:latest
       ARG CLI_SERVER
+      ARG TUF_URL
       ARG SYFT_VERSION=1.54.0
-      RUN dnf -y install --setopt=install_weak_deps=False git-core jq skopeo tar gzip findutils \
+      ARG COSIGN_VERSION=2.6.5
+      ARG GITSIGN_VERSION=0.17.1
+      RUN dnf -y install --setopt=install_weak_deps=False git-core jq skopeo tar gzip findutils golang \
        && dnf clean all
       RUN set -eu; arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/'); \
-          for tool in cosign gitsign rekor-cli ec; do \
-            if curl -fsSLk "${CLI_SERVER}/clients/linux/${tool}-${arch}.gz" -o "/tmp/${tool}.gz"; then \
-              gunzip -f "/tmp/${tool}.gz" && install -m 0755 "/tmp/${tool}" "/usr/local/bin/${tool}"; \
-            else echo "not on the CLI server: ${tool}"; fi; \
-          done; \
+          if [ -n "${CLI_SERVER}" ]; then \
+            echo "fetching Sigstore clients from this cluster's RHTAS CLI server: ${CLI_SERVER}"; \
+            for tool in cosign gitsign rekor-cli ec; do \
+              if curl -fsSLk "${CLI_SERVER}/clients/linux/${tool}-${arch}.gz" -o "/tmp/${tool}.gz"; then \
+                gunzip -f "/tmp/${tool}.gz" && install -m 0755 "/tmp/${tool}" "/usr/local/bin/${tool}"; \
+              else echo "not on the CLI server: ${tool}"; fi; \
+            done; \
+          else \
+            echo "no RHTAS CLI server on this cluster: falling back to upstream sigstore GitHub releases for cosign, rekor-cli (ec skipped)"; \
+            curl -fsSL "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-${arch}" -o /usr/local/bin/cosign \
+              && chmod +x /usr/local/bin/cosign; \
+            curl -fsSL "https://github.com/sigstore/rekor/releases/latest/download/rekor-cli-linux-${arch}" -o /usr/local/bin/rekor-cli \
+              && chmod +x /usr/local/bin/rekor-cli; \
+            echo "not available via the GitHub-release fallback: ec"; \
+          fi; \
+          if [ ! -x /usr/local/bin/gitsign ]; then \
+            if [ -n "${TUF_URL}" ]; then \
+              echo "building gitsign v${GITSIGN_VERSION} from source with this cluster's own RHTAS root.json embedded (see comment at the top of this file for why)"; \
+              export HOME=/root GOPATH=/root/go GOCACHE=/root/.cache/go-build; \
+              git clone --branch "v${GITSIGN_VERSION}" --depth 1 https://github.com/sigstore/gitsign.git /tmp/gitsign-src; \
+              cd /tmp/gitsign-src; \
+              go mod download github.com/sigstore/sigstore; \
+              sigdir=$(go list -m -f '{{.Dir}}' github.com/sigstore/sigstore); \
+              cp -r "$sigdir" /tmp/sigstore-patched && chmod -R u+w /tmp/sigstore-patched; \
+              curl -fsSLk "${TUF_URL}/root.json" -o /tmp/sigstore-patched/pkg/tuf/repository/root.json; \
+              go mod edit -replace github.com/sigstore/sigstore=/tmp/sigstore-patched; \
+              go mod tidy; \
+              go build -o /usr/local/bin/gitsign .; \
+              cd /; rm -rf /tmp/gitsign-src /tmp/sigstore-patched; \
+            else \
+              echo "no TUF_URL available to patch gitsign's embedded Rekor-TUF root: falling back to the upstream prebuilt binary, which WILL fail to sign/verify (see comment at the top of this file)"; \
+              curl -fsSL "https://github.com/sigstore/gitsign/releases/download/v${GITSIGN_VERSION}/gitsign_${GITSIGN_VERSION}_linux_${arch}" -o /usr/local/bin/gitsign \
+                && chmod +x /usr/local/bin/gitsign; \
+            fi; \
+          fi; \
           command -v cosign && command -v gitsign; \
           curl -fsSL "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_${arch}.tar.gz" \
             | tar -xz -C /usr/local/bin syft; \
           curl -fsSL "http://downloads.openshift-console.svc.cluster.local/${arch}/linux/oc.tar" | tar -x -C /usr/local/bin oc; \
-          cosign version | head -3; gitsign --version | head -1; syft version | head -2; oc version --client
+          cosign version | head -3; gitsign version | head -1; syft version | head -2; oc version --client
       ENV HOME=/tmp
   strategy:
     type: Docker
@@ -39,6 +109,8 @@ spec:
       buildArgs:
         - name: CLI_SERVER
           value: https://cli-server.CHANGE-ME
+        - name: TUF_URL
+          value: ""
   output:
     to:
       kind: ImageStreamTag

@@ -18,6 +18,13 @@
 *.zip
 *.tar.gz
 *.rar
+# ...except the Gradle wrapper jar, which MUST be committed (it's the bootstrap jar `./gradlew`
+# invokes to download the real Gradle distribution -- without it, `./gradlew` fails with
+# "Unable to access jarfile .../gradle-wrapper.jar"). This blanket *.jar rule silently excluded it
+# from every commit (local and the GitLab "Platform snapshot" re-push alike, since that re-push
+# re-applies this same .gitignore in a fresh `git init`), which broke the trusted-supply-chain
+# pipeline's build-image task for every Gradle-based service (app/, app/camel-ai-router/).
+!**/gradle/wrapper/gradle-wrapper.jar
 
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*

@@ -51,6 +51,7 @@ spec:
         labels:
           tekton.dev/pipeline: trusted-supply-chain
           app.kubernetes.io/part-of: trusted-software-supply-chain
+          backstage.io/kubernetes-id: coffee-menu-tssc   # Tekton tab of the catalog item in Developer Hub
       spec:
         pipelineRef:
           name: trusted-supply-chain

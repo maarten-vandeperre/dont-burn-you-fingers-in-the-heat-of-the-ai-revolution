@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>camel-ai-router — admin</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #2a2f3a; --text: #d7dae0; --muted: #8b93a3;
+    --accent: #4fa3ff; --ok: #3ecf8e; --err: #ff5d6c; --warn: #f5a623; --mono: "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, Segoe UI, Helvetica, Arial, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+  nav a { color: var(--accent); text-decoration: none; margin-left: 18px; font-size: 13px; }
+  nav a:hover { text-decoration: underline; }
+  main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+  .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; color: var(--muted); font-size: 12px; }
+  .toolbar button { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; cursor: pointer; font-size: 12px; }
+  .toolbar button:hover { border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  th { color: var(--muted); font-weight: 500; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #1d212b; }
+  tbody tr.selected { background: #1b2838; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .pill.local { background: #22304a; color: #7fb8ff; }
+  .pill.maas { background: #2a3a2a; color: #8fd68f; }
+  .pill.foundation-model { background: #3a2a3a; color: #d68fd6; }
+  .pill.unknown { background: #333; color: #aaa; }
+  .status-ok { color: var(--ok); }
+  .status-err { color: var(--err); }
+  .flag { font-size: 10px; padding: 1px 5px; border-radius: 4px; margin-left: 4px; background: #3a2f14; color: var(--warn); }
+  #detail { margin-top: 18px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; display: none; }
+  #detail h2 { margin: 0 0 10px; font-size: 14px; }
+  #detail .meta { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  #detail .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  #detail h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 6px; }
+  pre { background: #0b0d11; border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; margin: 0; }
+  footer { text-align: center; color: var(--muted); font-size: 11px; padding: 24px 0; }
+  .empty { color: var(--muted); padding: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>camel-ai-router <small>admin</small></h1>
+  <nav>
+    <a href="/v1/router/status" target="_blank">router status (json)</a>
+    <a href="/v1/models" target="_blank">models (json)</a>
+    <a href="/q/metrics" target="_blank">metrics (prometheus)</a>
+    <a href="/hawtio" target="_blank">Camel routes (Hawtio) →</a>
+  </nav>
+</header>
+<main>
+  <div class="toolbar">
+    <button id="refresh">Refresh</button>
+    <span id="auto">auto-refreshing every 3s</span>
+    <span id="count"></span>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th><th>Category</th><th>Provider</th><th>Backend</th><th>Status</th><th>Duration</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty" class="empty" style="display:none">No calls yet — send a request to <code>POST /v1/chat/completions</code>.</div>
+
+  <div id="detail">
+    <h2>Call #<span id="d-id"></span></h2>
+    <div class="meta" id="d-meta"></div>
+    <div class="cols">
+      <div><h3>Prompt (request body)</h3><pre id="d-prompt"></pre></div>
+      <div><h3>Response</h3><pre id="d-response"></pre></div>
+    </div>
+  </div>
+</main>
+<footer>In-memory, last 200 calls, cleared on restart. See README.md "Admin page &amp; Hawtio".</footer>
+<script>
+let selectedId = null;
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function prettyJson(text) {
+  try { return JSON.stringify(JSON.parse(text), null, 2); } catch (e) { return text; }
+}
+
+function fmtTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleTimeString() + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+
+async function loadRows() {
+  const res = await fetch('/admin/calls');
+  const calls = await res.json();
+  const tbody = document.getElementById('rows');
+  const empty = document.getElementById('empty');
+  document.getElementById('count').textContent = calls.length + ' call(s)';
+  if (calls.length === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  tbody.innerHTML = calls.map(c => {
+    const statusClass = c.success ? 'status-ok' : 'status-err';
+    const statusText = c.success ? ('OK ' + c.httpStatus) : ('ERR ' + c.httpStatus);
+    const flags = (c.forcedLocal ? '<span class="flag">forced-local</span>' : '')
+                + (c.fallback ? '<span class="flag">fallback</span>' : '');
+    const sel = String(c.id) === String(selectedId) ? ' selected' : '';
+    return `<tr class="row${sel}" data-id="${c.id}">
+      <td>${fmtTime(c.timestamp)}</td>
+      <td><span class="pill ${c.category}">${c.category}</span></td>
+      <td>${escapeHtml(c.provider)}${c.requestedProvider !== c.provider && c.requestedProvider !== 'auto' ? ' <span style="color:var(--muted)">(req: '+escapeHtml(c.requestedProvider)+')</span>' : ''}</td>
+      <td>${escapeHtml(c.backend || '')}</td>
+      <td class="${statusClass}">${statusText}${flags}</td>
+      <td>${c.durationMs} ms</td>
+    </tr>`;
+  }).join('');
+  document.querySelectorAll('#rows tr.row').forEach(tr => {
+    tr.addEventListener('click', () => showDetail(tr.dataset.id));
+  });
+}
+
+async function showDetail(id) {
+  selectedId = id;
+  const res = await fetch('/admin/calls/' + id);
+  if (!res.ok) { return; }
+  const c = await res.json();
+  document.getElementById('detail').style.display = 'block';
+  document.getElementById('d-id').textContent = c.id;
+  document.getElementById('d-meta').textContent =
+    `${fmtTime(c.timestamp)} · category=${c.category} · provider=${c.provider} (requested=${c.requestedProvider}) `
+    + `· backend=${c.backend || 'n/a'} · ${c.success ? 'success' : 'error'} ${c.httpStatus} · ${c.durationMs} ms`
+    + (c.forcedLocal ? ' · forced-local' : '') + (c.fallback ? ' · fallback' : '');
+  document.getElementById('d-prompt').textContent = prettyJson(c.prompt);
+  document.getElementById('d-response').textContent = prettyJson(c.response);
+  document.querySelectorAll('#rows tr.row').forEach(tr => tr.classList.toggle('selected', tr.dataset.id === String(id)));
+}
+
+document.getElementById('refresh').addEventListener('click', loadRows);
+loadRows();
+setInterval(loadRows, 3000);
+</script>
+</body>
+</html>

@@ -107,7 +107,7 @@ installs automatically.
 
 ```bash
 ./deploy.sh tssc setup     # Trusted Artifact Signer, Trusted Profile Analyzer (needs helm), Dev Spaces, pipeline
-./deploy.sh tssc run       # signed commit -> verify -> CI -> sign -> SBOM -> TPA -> ACS -> release -> Argo CD
+./deploy.sh tssc run       # signed commit -> verify -> CI checks (mocked, parallel) -> podman build -> sign -> SBOM -> TPA -> ACS -> release -> Argo CD (mocked)
 ```
 Details: `stack/tssc/README.md`; demo: `docs/demos/08-trusted-software-supply-chain.md`.
 

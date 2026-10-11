@@ -1,0 +1,10 @@
+# Red Hat OpenShift Dev Spaces (browser IDE): namespace + CheCluster CR. The operator subscription
+# lives in stack/operators/devspaces.yaml (installed up front with every other operator by
+# install_stack_operators()); this layer only applies once that operator's CRD is available
+# (apply_layer waits for checlusters.org.eclipse.che first). Also applied standalone by
+# stack/tssc/tssc.sh's devspaces() so './deploy.sh tssc setup' works even without './deploy.sh stack'.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - namespace.yaml
+  - checluster.yaml

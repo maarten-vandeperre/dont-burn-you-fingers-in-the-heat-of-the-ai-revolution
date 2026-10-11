@@ -1169,6 +1169,8 @@ wait_stack_services() {
   wait_until 600 "Keycloak realm demo imported" bash -c 'oc wait keycloakrealmimport/demo-realm -n keycloak --for=condition=Done --timeout=10s' || stack_issue keycloak-realm
   info "GitLab initialises its database on first start (~5-15 min)"
   wait_until 1500 "GitLab ready" deployment_ready gitlab gitlab || stack_issue gitlab
+  wait_until 900 "Dev Spaces operator ready" csv_ok_anywhere devspacesoperator || stack_issue devspaces-operator
+  wait_until 1200 "Dev Spaces ready" bash -c 'oc get checluster devspaces -n openshift-devspaces -o jsonpath="{.status.cheURL}" | grep -q https' || stack_issue devspaces
   info "Developer Hub installs its dynamic plugins on first start (~3-6 min)"
   wait_until 1200 "Developer Hub ready" deployment_ready rhdh backstage-developer-hub || stack_issue developer-hub
   wait_until 600 "Argo Rollouts ready" rollouts_ready || stack_issue argo-rollouts
@@ -1177,10 +1179,22 @@ wait_stack_services() {
 
 route_url() { local h; h=$(oc get route "$2" -n "$1" -o jsonpath='{.spec.host}' 2>/dev/null || true); [[ -n "$h" ]] && echo "https://${h}" || echo "(route ${1}/${2} not found)"; }
 
+# Dev Spaces has no predictable hostname (the operator picks its own route). Shared by stack_urls()
+# and rhdh_render_catalog() so the "live URL, else console fallback" lookup only lives in one place.
+devspaces_cheurl() { oc get checluster devspaces -n openshift-devspaces -o jsonpath='{.status.cheURL}' 2>/dev/null || true; }
+devspaces_console_link() {  # deep-link to the CheCluster console page when Dev Spaces isn't up (yet)
+  local console; console=$(oc whoami --show-console 2>/dev/null || true)
+  [[ -n "$console" ]] && echo "${console}/k8s/ns/openshift-devspaces/org.eclipse.che~v2~CheCluster/devspaces"
+}
+devspaces_url() {  # live workspace URL once Dev Spaces is installed, else the console fallback
+  local u; u=$(devspaces_cheurl)
+  [[ -n "$u" ]] && echo "$u" || devspaces_console_link
+}
+
 stack_urls() {
   need oc
   step "URLs"
-  local dash; dash=$(oc get consolelink rhodslink -o jsonpath='{.spec.href}' 2>/dev/null || true)
+  local dash du; dash=$(oc get consolelink rhodslink -o jsonpath='{.spec.href}' 2>/dev/null || true)
   info "OpenShift console    : $(oc whoami --show-console 2>/dev/null)"
   info "OpenShift AI         : ${dash:-console app launcher > Red Hat OpenShift AI}"
   info "  Gen AI playground  : OpenShift AI > Gen AI studio > Playground (project ${PLAYGROUND_NS})"
@@ -1188,12 +1202,23 @@ stack_urls() {
   info "MaaS endpoint        : https://$(param MAAS_HOSTNAME)/v1   (./deploy.sh test)"
   info "Traces               : console > Observe > Traces, or $(route_url tracing-system tempo-platform-jaegerui)"
   info "Kiali                : $(route_url istio-system kiali)"
+  # Bookinfo is an internal sidecar/Kiali smoke-test (no Route in stack/servicemesh/demo/bookinfo.yaml,
+  # and not part of any demo script in docs/demos/): the real access path is a port-forward, not a URL.
+  info "Bookinfo (mesh smoke-test): oc port-forward -n mesh-demo svc/productpage 9080:9080, then http://localhost:9080/productpage"
   info "Developer Hub        : https://$(grep -E '^RHDH_HOST=' "$RHDH_PARAMS_FILE" | cut -d= -f2-)   (catalog of everything + platform templates)"
   info "Argo CD              : $(route_url "$GITOPS_NS" openshift-gitops-server)"
   info "Keycloak             : $(route_url keycloak platform-sso)/admin   (realm demo, user ${DEMO_ADMIN_USER})"
   info "GitLab               : $(route_url gitlab gitlab)   (root / DEMO_ADMIN_PASSWORD, or Keycloak sign-in)"
-  info "Coffee shop          : $(route_url ai-demo coffee)"
+  du=$(devspaces_url)
+  info "Dev Spaces           : ${du:-not installed yet: ./deploy.sh tssc setup}"
+  local coffee_host; coffee_host=$(oc get route coffee -n ai-demo -o jsonpath='{.spec.host}' 2>/dev/null || true)
+  if [[ -n "$coffee_host" ]]; then
+    info "Coffee shop          : https://${coffee_host}"
+  else
+    info "Coffee shop          : not deployed: ./deploy.sh app all"
+  fi
   info "Tekton Pipelines     : console > Pipelines"
+  info "Trusted supply chain : ./deploy.sh tssc urls   (RHTAS, RHTPA, Dev Spaces, pipeline)"
   info "Kafka + Debezium CDC : ./deploy.sh cdc-demo"
 }
 
@@ -1222,6 +1247,7 @@ deploy_stack_oc() {
     kafkas.kafka.strimzi.io kafkanodepools.kafka.strimzi.io kafkaconnects.kafka.strimzi.io kafkaconnectors.kafka.strimzi.io
   apply_layer stack/keycloak "Keycloak (single sign-on)" keycloaks.k8s.keycloak.org keycloakrealmimports.k8s.keycloak.org
   apply_layer stack/gitlab "GitLab"
+  apply_layer stack/devspaces "Dev Spaces" checlusters.org.eclipse.che
   apply_layer stack/developer-hub "Developer Hub" backstages.rhdh.redhat.com
   apply_layer stack/gitops "Argo Rollouts" rolloutmanagers.argoproj.io
   # MaaS, models (with tracing), playground, MLflow component, observability
@@ -1296,6 +1322,36 @@ gitlab_seed() {
     gid=$(gitlab_api POST /groups "{\"name\":\"AI platform\",\"path\":\"${GITLAB_GROUP}\",\"visibility\":\"public\"}" | sed -n 's/^{"id":\([0-9]*\).*/\1/p')
   fi
   [[ -n "$gid" ]] || { warn "could not create GitLab group ${GITLAB_GROUP}"; return 1; }
+
+  # OIDC-provisioned accounts (DEMO_ADMIN_USER's "Demo Admin" -- the one account the whole demo
+  # signs in as) get no group membership from signing in via Keycloak alone: stack/gitlab/gitlab.yaml's
+  # OIDC config has no group-sync mapping, so the group/project we create/push to below never shows
+  # up on that user's personal "Projects" dashboard even though it's public and reachable by direct
+  # URL/API -- a real demo-breaking UX bug (confirmed live: blank "Welcome to GitLab, Demo!" page).
+  # Add them to the group directly as Owner so this, and every future project under it, shows up on
+  # their dashboard with no manual step. Idempotent; a harmless no-op warning (not a failure) if they
+  # haven't signed into GitLab yet -- OIDC auto-creates the account on first login (GitLab also
+  # suffixes the username on a reserved-path collision, e.g. "admin" -> "admin1", so we match by
+  # email, not username), and a later rerun of this picks the membership up then.
+  if command -v jq >/dev/null; then
+    local demo_email="${DEMO_ADMIN_USER}@demo.example.com" demo_uid demo_level
+    demo_uid=$(gitlab_api GET "/users?search=${demo_email}" | jq -r --arg e "$demo_email" '[.[] | select(.email==$e)][0].id // empty')
+    if [[ -n "$demo_uid" ]]; then
+      demo_level=$(gitlab_api GET "/groups/${GITLAB_GROUP}/members/all" | jq -r --argjson id "$demo_uid" '[.[] | select(.id==$id)][0].access_level // empty')
+      if [[ -z "$demo_level" ]]; then
+        gitlab_api POST "/groups/${gid}/members" "{\"user_id\":${demo_uid},\"access_level\":50}" | grep -q '"id"' \
+          && ok "added ${demo_email} (GitLab user #${demo_uid}) as Owner of group ${GITLAB_GROUP}: ${GITLAB_GROUP}/${GITLAB_PROJECT} now shows on their dashboard" \
+          || warn "could not add ${demo_email} to group ${GITLAB_GROUP} (already a member via a different path?)"
+      else
+        ok "${demo_email} already a member of group ${GITLAB_GROUP} (access level ${demo_level})"
+      fi
+    else
+      warn "no GitLab account yet for ${demo_email}: it's auto-created on their first Keycloak sign-in to GitLab -- rerun ./deploy.sh gitlab afterwards to add them to ${GITLAB_GROUP}"
+    fi
+  else
+    warn "jq not found: skipping the ${GITLAB_GROUP} group-membership check for ${DEMO_ADMIN_USER}@demo.example.com (install jq, then ./deploy.sh gitlab)"
+  fi
+
   gitlab_api GET "/projects/${GITLAB_GROUP}%2F${GITLAB_PROJECT}" | grep -q '"id"' \
     || gitlab_api POST /projects "{\"name\":\"${GITLAB_PROJECT}\",\"namespace_id\":${gid},\"visibility\":\"public\",\"description\":\"OpenShift 4.22 AI platform: manifests, demo apps (Quarkus, React, LangChain4j, Camel), docs\"}" >/dev/null
   ok "project ${GITLAB_GROUP}/${GITLAB_PROJECT}"
@@ -1388,11 +1444,28 @@ rhdh_align_api_version() {
 }
 
 rhdh_render_catalog() {  # catalog-templates/ -> catalog/ with the cluster's apps domain
-  local domain=$1 f
+  local domain=$1 f gl console devspaces_url
+  gl="gitlab-gitlab.${domain}"
+  console="https://console-openshift-console.${domain}"
+  # Link to the live workspace URL (pre-loaded with this repo) once Dev Spaces is installed
+  # (tssc setup), otherwise fall back to the CheCluster console page via the shared devspaces_*
+  # helpers (also used by stack_urls()) so the catalog link still resolves to something on this
+  # cluster even before Dev Spaces is up.
+  local che; che=$(devspaces_cheurl)
+  if [[ -n "$che" ]]; then
+    devspaces_url="${che}/#https://${gl}/ai-platform/platform.git"
+  else
+    devspaces_url=$(devspaces_console_link)
+  fi
   mkdir -p "$(RHDH_DIR)/catalog"
   for f in "$(RHDH_DIR)"/catalog-templates/*.yaml; do
-    sed -e "s/__APPS_DOMAIN__/${domain}/g" -e "s/__GITLAB_HOST__/gitlab-gitlab.${domain}/g" \
-        -e "s/__DEMO_ADMIN_USER__/${DEMO_ADMIN_USER}/g" "$f" > "$(RHDH_DIR)/catalog/$(basename "$f")"
+    # devspaces_url is a Dev Spaces workspace URL with a "#<repo-url>" fragment (the Dev Spaces
+    # factory URL convention), so it contains "#" itself and can't be used as the sed delimiter
+    # for its own substitution (that's why this one line uses "|" instead of "#"/"/" like the
+    # others -- the other three substituted values are plain hostnames and never contain "|").
+    sed -e "s/__APPS_DOMAIN__/${domain}/g" -e "s/__GITLAB_HOST__/${gl}/g" \
+        -e "s/__DEMO_ADMIN_USER__/${DEMO_ADMIN_USER}/g" \
+        -e "s|__DEVSPACES_URL__|${devspaces_url}|g" "$f" > "$(RHDH_DIR)/catalog/$(basename "$f")"
   done
   ok "catalog rendered for ${domain} ($(grep -h '^kind:' "$(RHDH_DIR)"/catalog/*.yaml | wc -l | tr -d ' ') entities)"
 }

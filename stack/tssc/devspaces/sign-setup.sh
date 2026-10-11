@@ -12,13 +12,24 @@ set +a
 
 bin="$HOME/.local/bin"; mkdir -p "$bin"
 arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-for tool in gitsign cosign; do
-  if [ ! -x "${bin}/${tool}" ]; then
-    curl -fsSLk "${CLI_SERVER}/clients/linux/${tool}-${arch}.gz" | gunzip > "${bin}/${tool}"
-    chmod +x "${bin}/${tool}"
-  fi
-done
-echo "gitsign: $("${bin}/gitsign" --version 2>&1 | head -1)  (from ${CLI_SERVER})"
+gitsign_version=0.17.1  # same fallback version pinned in stack/tssc/ci/tools-build.yaml
+if [ -n "${CLI_SERVER:-}" ]; then
+  for tool in gitsign cosign; do
+    if [ ! -x "${bin}/${tool}" ]; then
+      curl -fsSLk "${CLI_SERVER}/clients/linux/${tool}-${arch}.gz" | gunzip > "${bin}/${tool}"
+      chmod +x "${bin}/${tool}"
+    fi
+  done
+  tool_source="${CLI_SERVER}"
+else
+  # No RHTAS CLI server on this cluster (same gap as stack/tssc/ci/tools-build.yaml): fetch
+  # gitsign/cosign straight from their upstream sigstore GitHub releases instead.
+  [ -x "${bin}/gitsign" ] || curl -fsSL "https://github.com/sigstore/gitsign/releases/download/v${gitsign_version}/gitsign_${gitsign_version}_linux_${arch}" -o "${bin}/gitsign"
+  [ -x "${bin}/cosign" ] || curl -fsSL "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-${arch}" -o "${bin}/cosign"
+  chmod +x "${bin}/gitsign" "${bin}/cosign"
+  tool_source="upstream sigstore GitHub releases (no RHTAS CLI server on this cluster)"
+fi
+echo "gitsign: $("${bin}/gitsign" --version 2>&1 | head -1)  (from ${tool_source})"
 
 # No browser in a workspace: stand-in openers that fail make gitsign use the copy-the-code login
 # ("Go to the following link ... Enter verification code"), which works with every gitsign version.

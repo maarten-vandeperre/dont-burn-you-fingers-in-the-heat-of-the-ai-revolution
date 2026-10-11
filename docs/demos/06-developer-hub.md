@@ -37,6 +37,8 @@ Every step below has three parts: **Do**, **You see**, **Say**.
   * **Kubernetes**: Deployments, pods, VirtualService and DestinationRule
   * **API**: `rag-api` (OpenAPI) and what it consumes (`model-router-api`)
   * **CI** (Tekton) and **CD** (Argo CD), after `./deploy.sh app pipeline <url>` / `app gitops <url>`
+  * For the fully signed, SBOM-checked pipeline instead of this generic build, see component
+    **coffee-menu: trusted software supply chain** and demo 8
   * **View source** on Overview: opens `app/rag-service` in GitLab
 * **Say:** "No cluster login, no kubectl: everything a developer needs about their service, on one page."
 

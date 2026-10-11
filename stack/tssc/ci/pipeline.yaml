@@ -1,17 +1,27 @@
 # Trusted software supply chain for one demo service (default: coffee-menu).
 #
-#   clone -> verify-commit -> ci-tests -> build-image -> sign-image -> sbom -> tpa-check
-#         -> acs-checks -> push-release -> argocd-sync
+#                                   ,-> static-analysis (MOCK) ->,
+#   clone -> verify-commit --------+-> unit-tests       (MOCK) -+-> build-image -> sign-image -> sbom
+#                                   `-> integration-tests(MOCK) ->'
+#         -> tpa-check -> acs-checks -> push-release -> argocd-sync (MOCK unless an Argo CD app exists)
 #
-#   verify-commit  gitsign verify against Trusted Artifact Signer (keyless, Keycloak identity)
-#   sign-image     cosign signature, recorded in the RHTAS transparency log (Rekor)
-#   sbom           syft CycloneDX SBOM, attached to the image as a signed attestation
-#   tpa-check      SBOM uploaded to Trusted Profile Analyzer, advisories per severity, optional gate
-#   acs-checks     Advanced Cluster Security image + deployment checks (simulated without ACS)
-#   push-release   the signed digest promoted to :release
-#   argocd-sync    Argo CD app ai-demo pinned to the signed digest and synced (simulated without app)
+#   verify-commit        gitsign verify against Trusted Artifact Signer (keyless, Keycloak identity);
+#                         blocks the pipeline if the commit is unsigned or not from a known identity
+#   static-analysis       MOCK: stands in for SonarQube/Checkstyle/etc. (not wired into this demo)
+#   unit-tests             MOCK: stands in for `./gradlew test` (coffee-menu has no test sources yet)
+#   integration-tests      MOCK: stands in for a Testcontainers / staging-namespace test run
+#   build-image           podman builds the container from the service's Dockerfile
+#   sign-image            cosign signature, recorded in the RHTAS transparency log (Rekor)
+#   sbom                  syft CycloneDX SBOM, attached to the image as a signed attestation
+#   tpa-check             SBOM uploaded to Trusted Profile Analyzer, CVEs reported, optional gate
+#   acs-checks            Advanced Cluster Security image + deployment checks (MOCK without ACS)
+#   push-release          the signed digest promoted to :release
+#   argocd-sync           Argo CD app ai-demo pinned to the signed digest and synced (MOCK without app)
 #
-# Settings: ConfigMap tssc-config and Secret tssc-secrets (written by stack/tssc/tssc.sh).
+# The three middle tasks run in parallel (same runAfter, no dependency between them) and are
+# ALWAYS mocked: every mocked task prints "MOCK" or "SIMULATED" as the first word of its log so a
+# demo audience can tell real cryptographic/security steps (gitsign, cosign, syft, RHTPA) apart
+# from stand-ins. Settings: ConfigMap tssc-config and Secret tssc-secrets (stack/tssc/tssc.sh).
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -112,8 +122,12 @@ spec:
                 echo "WARNING: commit signature not verified; continuing (require-signed-commit=false)"
               fi
 
-    # ------------------------------------------------------------------ 3. CI: compile and unit tests
-    - name: ci-tests
+    # ------------------------------------------------------------------ 3a/3b/3c. CI checks (parallel, all MOCK)
+    # Same runAfter, no dependency between them: Tekton schedules the three in parallel. None of
+    # them is a real tool call; each exists to show where a real static analyzer, unit test suite
+    # and integration test suite would plug into the trusted supply chain. coffee-menu itself has
+    # no test sources yet, so "mock" also reflects reality here, not just a demo shortcut.
+    - name: static-analysis
       runAfter: [verify-commit]
       workspaces: [{name: source, workspace: source}]
       params: [{name: service, value: $(params.service)}]
@@ -121,25 +135,60 @@ spec:
         params: [{name: service}]
         workspaces: [{name: source}]
         steps:
-          - name: gradle-test
-            image: registry.access.redhat.com/ubi9/openjdk-25:latest
-            env:
-              - {name: SERVICE, value: $(params.service)}
-              - {name: GRADLE_USER_HOME, value: $(workspaces.source.path)/.gradle-home}
-            computeResources:
-              requests: {cpu: "1", memory: 2Gi}
-              limits: {memory: 3Gi}
+          - name: mock-static-analysis
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            env: [{name: SERVICE, value: $(params.service)}]
             script: |
               #!/usr/bin/env bash
               set -euo pipefail
-              cd "$(workspaces.source.path)/src/app"
-              chmod +x gradlew
-              ./gradlew --no-daemon --console=plain ":${SERVICE}:test"
-              echo "OK: ${SERVICE} compiles and its tests pass"
+              echo "MOCK: static code analysis (stands in for SonarQube / Checkstyle / SpotBugs; not wired into this demo)"
+              cd "$(workspaces.source.path)/src/app" 2>/dev/null || true
+              files=$(find "./${SERVICE}" -name '*.java' 2>/dev/null | wc -l | tr -d ' ')
+              echo "  scanned ${files} real .java file(s) under app/${SERVICE} (file count is real, findings are not)"
+              echo "  MOCK result: 0 blocker, 0 critical, 1 minor style finding"
+              echo "MOCK OK: static analysis quality gate passed (simulated, no real scanner ran)"
+    - name: unit-tests
+      runAfter: [verify-commit]
+      workspaces: [{name: source, workspace: source}]
+      params: [{name: service, value: $(params.service)}]
+      taskSpec:
+        params: [{name: service}]
+        workspaces: [{name: source}]
+        steps:
+          - name: mock-unit-tests
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            env: [{name: SERVICE, value: $(params.service)}]
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              echo "MOCK: unit tests (stands in for './gradlew :${SERVICE}:test'; no real test runner executed)"
+              cd "$(workspaces.source.path)/src/app" 2>/dev/null || true
+              tests=$(find "./${SERVICE}" -path '*/test/*' -name '*.java' 2>/dev/null | wc -l | tr -d ' ')
+              echo "  real test source files found under app/${SERVICE}: ${tests}"
+              echo "  MOCK result: Tests run: 38, Failures: 0, Skipped: 0"
+              echo "MOCK OK: unit tests passed (simulated, no real test runner ran)"
+    - name: integration-tests
+      runAfter: [verify-commit]
+      workspaces: [{name: source, workspace: source}]
+      params: [{name: service, value: $(params.service)}]
+      taskSpec:
+        params: [{name: service}]
+        workspaces: [{name: source}]
+        steps:
+          - name: mock-integration-tests
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            env: [{name: SERVICE, value: $(params.service)}]
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              echo "MOCK: integration tests (stands in for Testcontainers or a staging-namespace run; nothing was deployed)"
+              echo "  would exercise: ${SERVICE} against a live PostgreSQL + the other ai-demo services"
+              echo "  MOCK result: 6 scenarios passed, 0 failed"
+              echo "MOCK OK: integration tests passed (simulated, no real environment was exercised)"
 
-    # ------------------------------------------------------------------ 4. build and push the image
+    # ------------------------------------------------------------------ 4. build and push the image (podman)
     - name: build-image
-      runAfter: [ci-tests]
+      runAfter: [static-analysis, unit-tests, integration-tests]
       workspaces: [{name: source, workspace: source}]
       params:
         - {name: service, value: $(params.service)}
@@ -149,8 +198,8 @@ spec:
         workspaces: [{name: source}]
         results: [{name: image-ref}, {name: image-digest}, {name: image-repo}]
         steps:
-          - name: buildah
-            image: registry.redhat.io/rhel9/buildah:latest
+          - name: podman
+            image: registry.redhat.io/rhel9/podman:latest
             env:
               - {name: SERVICE, value: $(params.service)}
               - {name: TAG, value: $(params.tag)}
@@ -168,16 +217,17 @@ spec:
               dockerfile=Dockerfile; [ -f "${SERVICE}/Dockerfile" ] && dockerfile="${SERVICE}/Dockerfile"
               base_images=$(grep -E '^FROM ' "$dockerfile" | awk '{print $2}' | sort -u | tr '\n' ' ')
               echo "base images: ${base_images}"
-              buildah --storage-driver=vfs bud --format=oci --build-arg "SERVICE=${SERVICE}" \
+              echo "building with podman (storage driver vfs, chroot isolation: no proc/sys mount needed under this cluster's SCC)"
+              podman build --storage-driver=vfs --isolation=chroot --format=oci --build-arg "SERVICE=${SERVICE}" \
                 -f "$dockerfile" -t "${repo}:${TAG}" .
-              buildah --storage-driver=vfs push --tls-verify=false --digestfile /tmp/digest \
+              podman push --storage-driver=vfs --tls-verify=false --digestfile /tmp/digest \
                 --creds "pipeline:$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
                 "${repo}:${TAG}" "docker://${repo}:${TAG}"
               digest=$(cat /tmp/digest)
               printf '%s' "$repo" > "$(results.image-repo.path)"
               printf '%s' "$digest" > "$(results.image-digest.path)"
               printf '%s' "${repo}@${digest}" > "$(results.image-ref.path)"
-              echo "OK: pushed ${repo}:${TAG} = ${digest}"
+              echo "OK: pushed ${repo}:${TAG} = ${digest} (built with podman)"
 
     # ------------------------------------------------------------------ 5. sign the image
     - name: sign-image

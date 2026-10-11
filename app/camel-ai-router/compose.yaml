@@ -1,0 +1,43 @@
+# camel-ai-router: podman compose up --build -d      (API: http://localhost:8085)
+#
+#   client -> camel-ai-router (Quarkus + Camel, :8085) --provider=openai-----> OpenAI
+#                                                       --provider=anthropic-> Anthropic
+#                                                       --provider=vllm------> vLLM on OpenShift AI
+#                                                       --provider=local-----> local OpenAI-compatible model
+#                                                       --(default/auto)-----> OpenAI, else local, else error
+#   any online provider failing falls back to the local model (circuit breaker + fallback, see README)
+#
+# Configuration: .env (copy .env.example).
+name: camel-ai-router
+
+services:
+  camel-ai-router:
+    build: .
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-3-5-haiku-latest}
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      ANTHROPIC_MAX_TOKENS: ${ANTHROPIC_MAX_TOKENS:-1024}
+      VLLM_BASE_URL: ${VLLM_BASE_URL:-}
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+      VLLM_MODEL: ${VLLM_MODEL:-}
+      VLLM_TRUST_ALL: ${VLLM_TRUST_ALL:-false}
+      LOCAL_BASE_URL: ${LOCAL_BASE_URL:-http://host.containers.internal:35000}
+      LOCAL_API_KEY: ${LOCAL_API_KEY:-}
+      LOCAL_MODEL: ${LOCAL_MODEL:-}
+      BREAKER_FAILURE_THRESHOLD: ${BREAKER_FAILURE_THRESHOLD:-5}
+      BREAKER_WINDOW_MINUTES: ${BREAKER_WINDOW_MINUTES:-2}
+      BREAKER_OPEN_MINUTES: ${BREAKER_OPEN_MINUTES:-5}
+      BREAKER_TIMEOUT_MS: ${BREAKER_TIMEOUT_MS:-60000}
+    ports:
+      - "8085:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/q/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped

@@ -13,3 +13,4 @@ resources:
   - streams-for-kafka.yaml
   - developer-hub.yaml
   - keycloak.yaml
+  - devspaces.yaml      # Dev Spaces (browser IDE for the trusted supply chain demo)

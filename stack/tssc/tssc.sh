@@ -57,7 +57,11 @@ wait_until() {  # wait_until <seconds> <label> <command...>
     sleep 20
   done
 }
-rand() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-24}"; }
+# `head -c` exits as soon as it has read N bytes, which SIGPIPEs the still-writing `tr` upstream;
+# under `pipefail` that makes the *pipeline* report a non-zero status (even though the N-char output
+# is correct), which trips our `ERR` trap. The `|| true` absorbs that false failure; stdout/the
+# generated string are unaffected either way.
+rand() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-24}" || true; }
 domain() { oc get ingresses.config/cluster -o jsonpath='{.spec.domain}'; }
 csv_ok() { oc get csv -n "$1" -o jsonpath='{range .items[*]}{.metadata.name} {.status.phase}{"\n"}{end}' | grep -q "^$2.* Succeeded"; }
 
@@ -140,6 +144,10 @@ keycloak_setup() {
 operators() {
   step "Operators: Trusted Artifact Signer, Dev Spaces"
   oc apply -k "${TSSC_DIR}/operators" >/dev/null
+  # Dev Spaces' Subscription lives in stack/operators (./deploy.sh stack installs it with every
+  # other operator); applied here too so './deploy.sh tssc setup' works standalone on a cluster
+  # that never ran './deploy.sh stack'.
+  oc apply -f "${ROOT_DIR}/stack/operators/devspaces.yaml" >/dev/null
   wait_until 900 "Trusted Artifact Signer operator" csv_ok openshift-operators rhtas-operator && ok "Trusted Artifact Signer operator"
   wait_until 900 "Dev Spaces operator" csv_ok openshift-operators devspacesoperator && ok "Dev Spaces operator"
 }
@@ -215,11 +223,61 @@ rhtpa() {
                     --set modules.createImporters.importers.cve.cve.disabled=false)
     info "vulnerability importers ON (CVE list + GitHub advisories: several GB, first import takes hours)"
   fi
+  # Chart bug workaround: with storage.type=filesystem (used here), the chart's migrate-db Job runs
+  # as a Helm pre-install/pre-upgrade hook and mounts a PVC named "storage" — but that PVC template
+  # has no helm.sh/hook annotation, so Helm only creates it as a normal resource *after* all
+  # pre-install hooks have already succeeded. On a fresh install this is a deadlock: migrate-db's pod
+  # can never schedule ("persistentvolumeclaim \"storage\" not found"), so `helm upgrade --install`
+  # times out no matter how high --timeout is set (verified live: pod stuck Pending ~13min on
+  # 0/6 nodes schedulable, FailedScheduling: persistentvolumeclaim "storage" not found). Pre-create
+  # the PVC ourselves (idempotent) with the exact spec/labels the chart would render, plus the
+  # meta.helm.sh/release-* annotations Helm needs to adopt a pre-existing resource into the release
+  # instead of failing the subsequent apply with "invalid ownership metadata".
+  if ! oc get pvc storage -n "$TPA_NS" >/dev/null 2>&1; then
+    oc apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: storage
+  namespace: ${TPA_NS}
+  labels:
+    app.kubernetes.io/name: storage
+    app.kubernetes.io/instance: redhat-trusted-profile-analyzer
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: trustify
+  annotations:
+    meta.helm.sh/release-name: redhat-trusted-profile-analyzer
+    meta.helm.sh/release-namespace: ${TPA_NS}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+EOF
+  fi
+  # Second chart bug, upgrade-only: migrate-db's pre-install,pre-upgrade hook mounts the same
+  # ReadWriteOnce "storage" PVC as the long-running server/importer Deployments. On a fresh install
+  # nothing else holds it yet, but on a re-run (helm upgrade) those Deployments are already up and
+  # keep the volume attached on their node — migrate-db's pod then gets stuck Pending forever with
+  # "FailedAttachVolume: Multi-Attach error ... already used by pod(s) server-..., importer-..."
+  # (verified live). Scale them to 0 before the hook runs so it can attach the volume; helm's normal
+  # (non-hook) apply phase that follows a successful pre-upgrade hook re-creates/scales them back up
+  # to the chart's desired replica count, so no explicit scale-up afterwards is needed.
+  if helm status redhat-trusted-profile-analyzer -n "$TPA_NS" >/dev/null 2>&1; then
+    info "existing release: scaling down server/importer first (they hold the storage PVC that migrate-db's upgrade hook needs)"
+    oc scale deployment/server deployment/importer -n "$TPA_NS" --replicas=0 >/dev/null 2>&1 || true
+    wait_until 120 "server/importer scaled down" bash -c \
+      "[[ \$(oc get pods -n ${TPA_NS} -l 'app.kubernetes.io/name in (server,importer)' --field-selector=status.phase=Running -o name | wc -l) -eq 0 ]]" || true
+  fi
   helm repo add openshift-helm-charts https://charts.openshift.io/ >/dev/null 2>&1 || true
   helm repo update openshift-helm-charts >/dev/null
+  # --timeout bounds the pre-/post-install hook Jobs (create-db, migrate-db, create-importers), not
+  # the importer's actual CVE/OSV data ingestion (that keeps running in the DB-backed importer
+  # service long after this returns — see the "vulnerability importers ON" note above). 15m is well
+  # above observed hook-Job durations (seconds to low single-digit minutes once scheduling works).
   helm upgrade --install redhat-trusted-profile-analyzer openshift-helm-charts/redhat-trusted-profile-analyzer \
     -n "$TPA_NS" --values "$values" --values "${TSSC_DIR}/rhtpa/values-importers.yaml" \
-    --set-string appDomain="-${TPA_NS}.${d}" "${importer_flags[@]}" >/dev/null
+    --set-string appDomain="-${TPA_NS}.${d}" "${importer_flags[@]}" --timeout 15m >/dev/null
   rm -f "$values"
   ok "helm release redhat-trusted-profile-analyzer"
   wait_until 900 "RHTPA server route" tpa_route || true
@@ -227,14 +285,44 @@ rhtpa() {
   TPA_URL=${host:+https://${host}}
   [[ -n "$TPA_URL" ]] && ok "Trusted Profile Analyzer: ${TPA_URL} (sign in: admin / your demo password)" \
     || warn "no RHTPA route yet: oc get pods,routes -n ${TPA_NS}"
+  [[ "$TPA_IMPORTERS" == true ]] && info "vulnerability importers scheduled (period: 1d); setup does not" \
+    "wait for the first import to finish — that continues in the background for hours, by design"
+}
+
+# ----------------------------------------------------------------------------- GitLab prerequisite
+# GitLab (namespace "gitlab") must exist with a working automation token *before* devspaces() (it
+# provisions a per-user GitLab PAT for each workspace) and signing_env() (it pushes signing.env
+# there) run — and before ci() (its pipeline/trigger reference the same repo). Auto-provision it
+# if missing/incomplete rather than making the user run a separate command first: './deploy.sh sso'
+# deploys GitLab's k8s resources (and Keycloak if that's also missing) — idempotent, safe to call
+# even when already up; './deploy.sh gitlab' (gitlab_seed) then creates the root API token, the
+# ai-platform group / platform project, and pushes a full repo snapshot (incl. devfile.yaml and,
+# once written, signing.env) — also idempotent, safe to re-run.
+ensure_gitlab() {
+  step "GitLab (repo for Dev Spaces + commit signing)"
+  if oc get namespace gitlab >/dev/null 2>&1 && oc get route gitlab -n gitlab >/dev/null 2>&1 \
+      && oc get secret gitlab-automation-token -n gitlab >/dev/null 2>&1; then
+    ok "GitLab already deployed (namespace, route, automation token present)"
+  else
+    info "GitLab not found/incomplete: deploying it now with ./deploy.sh sso (idempotent; also installs Keycloak if that's missing too)"
+    "${ROOT_DIR}/deploy.sh" sso 2>&1 | grep -E 'OK|WARN|ERROR' || true
+    wait_until 1500 "GitLab ready" oc rollout status deployment/gitlab -n gitlab --timeout=10s \
+      || { warn "GitLab did not become ready in time: oc get pods -n gitlab"; return 1; }
+  fi
+  info "seeding GitLab: automation token, group/project ${GITLAB_PROJECT_PATH}, repo push"
+  "${ROOT_DIR}/deploy.sh" gitlab 2>&1 | grep -E 'OK|WARN|ERROR' || true
+  oc get secret gitlab-automation-token -n gitlab >/dev/null 2>&1 \
+    || { warn "GitLab seeding did not produce an automation token: oc get pods -n gitlab, then ./deploy.sh gitlab"; return 1; }
 }
 
 # ----------------------------------------------------------------------------- 5. Dev Spaces
 devspaces() {
   step "Dev Spaces"
   wait_until 300 "CheCluster API" oc get crd checlusters.org.eclipse.che || { warn "Dev Spaces API missing"; return 0; }
-  oc get namespace "$DS_NS" >/dev/null 2>&1 || oc create namespace "$DS_NS" >/dev/null
-  oc apply -f "${TSSC_DIR}/devspaces/checluster.yaml" >/dev/null
+  # Namespace + CheCluster CR: shared with the main stack (stack/devspaces, apply_layer in
+  # deploy_stack_oc()) so there is one source of truth; applying it again here is idempotent and
+  # keeps './deploy.sh tssc setup' self-sufficient even without './deploy.sh stack'.
+  oc apply -k "${ROOT_DIR}/stack/devspaces" >/dev/null
   wait_until 1200 "Dev Spaces URL" bash -c "oc get checluster devspaces -n ${DS_NS} -o jsonpath='{.status.cheURL}' | grep -q https" || true
   local url; url=$(oc get checluster devspaces -n "$DS_NS" -o jsonpath='{.status.cheURL}' 2>/dev/null || true)
   ok "Dev Spaces: ${url:-starting}"
@@ -279,9 +367,22 @@ gitlab_api() {
   [[ $# -ge 3 ]] && args+=(-d "$3")
   curl "${args[@]}" "https://${host}/api/v4$2"
 }
+# ci()'s pipeline/RBAC/image-stream pushes target namespace ai-demo, but the actual runtime
+# dependency is lightweight (RBAC + image-stream pushes + a few tolerant environment checks + a
+# self-documented "MOCK without app" Argo CD sync step) — it doesn't need the full app running.
+# Auto-provision the namespace (idempotent) rather than hard-dying, per the same "prefer
+# auto-provisioning over a better error message" preference as ensure_gitlab() above.
+ensure_ai_demo() {
+  oc get namespace ai-demo >/dev/null 2>&1 && return 0
+  info "namespace ai-demo not found: deploying the demo apps now with ./deploy.sh app all (idempotent; this can take a while)"
+  "${ROOT_DIR}/deploy.sh" app all 2>&1 | grep -E 'OK|WARN|ERROR' || true
+  oc get namespace ai-demo >/dev/null 2>&1 \
+    || die "namespace ai-demo still not found after ./deploy.sh app all: oc get events -n ai-demo"
+}
+
 ci() {
   step "CI namespace ${CI_NS}: tools image, signing key, pipeline, webhook"
-  oc get namespace ai-demo >/dev/null 2>&1 || die "namespace ai-demo not found: deploy the demo apps first (./deploy.sh app all)"
+  ensure_ai_demo
   oc apply -k "${TSSC_DIR}/ci" >/dev/null
   ok "pipeline trusted-supply-chain, trigger gitlab-push, RBAC"
 
@@ -299,18 +400,40 @@ ci() {
     --from-literal=gitlab-webhook-token="$webhook" --dry-run=client -o yaml | oc apply -f - >/dev/null
   ok "ConfigMap tssc-config, Secret tssc-secrets"
 
-  # tools image: Sigstore clients from this cluster's CLI server
-  if [[ -z "$CLI_SERVER" ]]; then die "RHTAS CLI server route not found (Trusted Artifact Signer not ready?)"; fi
+  # tools image: Sigstore clients, ideally from this cluster's CLI server so they match the RHTAS
+  # server version. Some RHTAS operator versions (confirmed: 1.5.0 — `oc explain securesign.spec`
+  # has no cliServer field, and there is no cli-server Deployment/Service/Route in
+  # trusted-artifact-signer) don't ship this component at all, so CLI_SERVER can legitimately stay
+  # empty even once RHTAS itself is fully Ready — tools-build.yaml's Dockerfile falls back to
+  # fetching cosign/gitsign/rekor-cli from their upstream sigstore GitHub releases in that case, so
+  # the build still happens either way (warn, don't skip, so the pipeline's trusted-supply-chain
+  # run and Dev Spaces commit signing still get a working tools image).
+  # Patch buildArgs unconditionally (even to "") -- the BuildConfig's default placeholder value
+  # ("https://cli-server.CHANGE-ME") is non-empty, so leaving it unpatched when CLI_SERVER is
+  # empty would make the Dockerfile's `[ -n "${CLI_SERVER}" ]` check true and send it curling
+  # against that fake host instead of taking the GitHub-releases fallback path.
   oc patch bc tssc-tools -n "$CI_NS" --type json \
     -p "[{\"op\":\"replace\",\"path\":\"/spec/strategy/dockerStrategy/buildArgs/0/value\",\"value\":\"${CLI_SERVER}\"}]" >/dev/null
+  if [[ -z "$CLI_SERVER" ]]; then
+    warn "no RHTAS CLI server route (removed in some operator versions, e.g. 1.5.0): building the tools image " \
+      "from upstream sigstore GitHub releases instead (see stack/tssc/ci/tools-build.yaml)"
+  fi
+  # TUF_URL lets the Dockerfile build gitsign from source with this cluster's own (non-expired,
+  # correctly-keyed) root.json embedded in place of upstream's permanently-stale default -- see
+  # the long comment at the top of tools-build.yaml for why this is necessary.
+  oc patch bc tssc-tools -n "$CI_NS" --type json \
+    -p "[{\"op\":\"replace\",\"path\":\"/spec/strategy/dockerStrategy/buildArgs/1/value\",\"value\":\"${TUF_URL}\"}]" >/dev/null
   if [[ "$REBUILD_TOOLS" == true ]] || ! oc get istag tssc-tools:latest -n "$CI_NS" >/dev/null 2>&1; then
     info "building the tools image (cosign, gitsign, rekor-cli, syft, oc; ~3 min)"
     oc start-build tssc-tools -n "$CI_NS" --wait >/dev/null || die "tools image build failed: oc logs -f bc/tssc-tools -n ${CI_NS}"
   fi
   ok "tools image ${TOOLS_IMAGE}"
 
-  # cosign key pair, generated in the cluster straight into a Secret (never on this machine)
-  if ! oc get secret cosign-signing -n "$CI_NS" >/dev/null 2>&1; then
+  # cosign key pair, generated in the cluster straight into a Secret (never on this machine).
+  # Needs the tools image (cosign binary) built above — skip gracefully if that was skipped too.
+  if ! oc get istag tssc-tools:latest -n "$CI_NS" >/dev/null 2>&1; then
+    warn "no tools image: skipping cosign key pair generation (see the CLI server warning above)"
+  elif ! oc get secret cosign-signing -n "$CI_NS" >/dev/null 2>&1; then
     oc delete job cosign-keygen -n "$CI_NS" --ignore-not-found >/dev/null
     oc apply -f - >/dev/null <<EOF
 apiVersion: batch/v1
@@ -335,7 +458,8 @@ EOF
     oc wait job/cosign-keygen -n "$CI_NS" --for=condition=Complete --timeout=300s >/dev/null \
       || die "cosign key generation failed: oc logs job/cosign-keygen -n ${CI_NS}"
   fi
-  ok "cosign key pair in Secret ${CI_NS}/cosign-signing (public key: oc get secret cosign-signing -n ${CI_NS} -o jsonpath='{.data.cosign\\.pub}' | base64 -d)"
+  oc get secret cosign-signing -n "$CI_NS" >/dev/null 2>&1 \
+    && ok "cosign key pair in Secret ${CI_NS}/cosign-signing (public key: oc get secret cosign-signing -n ${CI_NS} -o jsonpath='{.data.cosign\\.pub}' | base64 -d)"
 
   # GitLab push webhook -> EventListener
   local el pid hooks
@@ -369,9 +493,13 @@ CLI_SERVER=${CLI_SERVER}
 SIGNER_IDENTITY=${SIGNER}
 EOF
   ok "written"
+  # ensure_gitlab (called earlier in setup()) guarantees the token normally; the check stays as a
+  # defensive no-op for direct/partial invocations (e.g. a lone `tssc.sh` function call in a repl).
   if oc get secret gitlab-automation-token -n gitlab >/dev/null 2>&1; then
     info "pushing the repository (incl. devfile.yaml and signing.env) to GitLab"
     "${ROOT_DIR}/deploy.sh" gitlab | grep -E 'OK|WARN|ERROR' || true
+  else
+    warn "no GitLab automation token: skipping repo push (run ./deploy.sh tssc setup to auto-provision GitLab)"
   fi
 }
 
@@ -382,6 +510,7 @@ setup() {
   operators
   keycloak_setup
   rhtas
+  ensure_gitlab
   [[ "$SKIP_TPA" == true ]] && info "Trusted Profile Analyzer skipped (--skip-tpa)" || rhtpa
   [[ "$SKIP_DEVSPACES" == true ]] && info "Dev Spaces skipped (--skip-devspaces)" || devspaces
   ci
@@ -415,6 +544,7 @@ metadata:
   namespace: ${CI_NS}
   labels:
     app.kubernetes.io/part-of: trusted-software-supply-chain
+    backstage.io/kubernetes-id: ${service}-tssc   # Tekton tab of the catalog item in Developer Hub
 spec:
   pipelineRef:
     name: trusted-supply-chain
