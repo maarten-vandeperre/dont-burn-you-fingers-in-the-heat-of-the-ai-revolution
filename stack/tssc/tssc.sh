@@ -222,6 +222,16 @@ rhtpa() {
     importer_flags=(--set modules.createImporters.importers.osv-github.osv.disabled=false
                     --set modules.createImporters.importers.cve.cve.disabled=false)
     info "vulnerability importers ON (CVE list + GitHub advisories: several GB, first import takes hours)"
+    # The chart's own default (modules.importer.resources.requests: 1 CPU / 8Gi memory) is sized
+    # for a dedicated prod node, not a small demo cluster — and the importer Deployment has a
+    # *required* pod affinity to co-locate with the "server" pod (same hostname), so it can only
+    # ever land on whichever one node that happens to be; if that node is already busy, 8Gi simply
+    # never fits no matter how much headroom the rest of the cluster has (verified live:
+    # FailedScheduling "Insufficient memory" while other nodes sat mostly idle). Ask for less so it
+    # can actually schedule on a modest cluster; the importer just runs its periodic (1d) sync
+    # slower/with smaller batches under memory pressure, it doesn't need 8Gi to make progress.
+    importer_flags+=(--set modules.importer.resources.requests.memory=1Gi
+                      --set modules.importer.resources.requests.cpu=250m)
   fi
   # Chart bug workaround: with storage.type=filesystem (used here), the chart's migrate-db Job runs
   # as a Helm pre-install/pre-upgrade hook and mounts a PVC named "storage" — but that PVC template
@@ -252,8 +262,22 @@ spec:
   accessModes: [ReadWriteOnce]
   resources:
     requests:
-      storage: 10Gi
+      storage: 20Gi
 EOF
+  fi
+  # Self-heal an existing, already-undersized PVC (e.g. from before this 20Gi default): ext4 (this
+  # cluster's StorageClass) ties its *inode* budget to byte size at mkfs time, so growing the PVC
+  # also grows available inodes -- confirmed live, 10Gi->20Gi doubled free inodes from 0 to 640K,
+  # which is what actually fixes Trusted Profile Analyzer's "StorageFull"/inode-exhaustion caveat
+  # (not a code workaround: `df -h` can look nearly empty while `df -i` is already at 100%). The
+  # filesystem resize itself only completes once a pod remounts the volume, which the scale-down +
+  # helm-driven scale-up cycle right below already does on every upgrade, so just patch the spec
+  # here; no extra restart needed. Requires allowVolumeExpansion: true on the StorageClass (true on
+  # this cluster's ocs-external-storagecluster-ceph-rbd).
+  local cur_size; cur_size=$(oc get pvc storage -n "$TPA_NS" -o jsonpath='{.spec.resources.requests.storage}' 2>/dev/null || true)
+  if [[ -n "$cur_size" && "$cur_size" != "20Gi" ]]; then
+    info "existing storage PVC is ${cur_size}: growing it to 20Gi (fixes TPA's inode-exhaustion caveat, not just a workaround)"
+    oc patch pvc storage -n "$TPA_NS" --type merge -p '{"spec":{"resources":{"requests":{"storage":"20Gi"}}}}' >/dev/null 2>&1 || true
   fi
   # Second chart bug, upgrade-only: migrate-db's pre-install,pre-upgrade hook mounts the same
   # ReadWriteOnce "storage" PVC as the long-running server/importer Deployments. On a fresh install
@@ -296,8 +320,19 @@ EOF
 # if missing/incomplete rather than making the user run a separate command first: './deploy.sh sso'
 # deploys GitLab's k8s resources (and Keycloak if that's also missing) — idempotent, safe to call
 # even when already up; './deploy.sh gitlab' (gitlab_seed) then creates the root API token, the
-# ai-platform group / platform project, and pushes a full repo snapshot (incl. devfile.yaml and,
-# once written, signing.env) — also idempotent, safe to re-run.
+# ai-platform group / platform project, and pushes a full repo snapshot.
+#
+# That snapshot push is NOT safe to repeat once the project already has that snapshot: it is a
+# full-repo force-push of a brand-new orphan commit ("Platform snapshot <date>"), which discards
+# *any* history added since — including commits signed in Dev Spaces. Confirmed to have actually
+# happened: a user ran `tssc setup` a second time on an already-working cluster, this call fired
+# again unconditionally, and it silently reset `main` to that fresh snapshot, wiping their signed
+# commit (and, because their workspace also happened to be recreated at the same time, its local
+# `.git/config` signing settings too — see devfile.yaml's postStart fix). `tssc setup` must be
+# safe to re-run at any time without resetting anything that already works, so only do this the
+# first time: once the project exists on GitLab (and the force-push already happened at least
+# once), running `./deploy.sh gitlab` again is left to whoever explicitly wants a fresh snapshot
+# (e.g. after editing the demo's source locally), not to every `tssc setup`.
 ensure_gitlab() {
   step "GitLab (repo for Dev Spaces + commit signing)"
   if oc get namespace gitlab >/dev/null 2>&1 && oc get route gitlab -n gitlab >/dev/null 2>&1 \
@@ -309,7 +344,14 @@ ensure_gitlab() {
     wait_until 1500 "GitLab ready" oc rollout status deployment/gitlab -n gitlab --timeout=10s \
       || { warn "GitLab did not become ready in time: oc get pods -n gitlab"; return 1; }
   fi
-  info "seeding GitLab: automation token, group/project ${GITLAB_PROJECT_PATH}, repo push"
+  if oc get secret gitlab-automation-token -n gitlab >/dev/null 2>&1 \
+      && gitlab_api GET "/projects/${GITLAB_PROJECT_PATH//\//%2F}/repository/branches/main" 2>/dev/null | grep -q '"name"'; then
+    ok "GitLab project ${GITLAB_PROJECT_PATH} already seeded (main branch exists): not re-pushing" \
+       "(a repeat snapshot push would discard any commits made since, signed or not — use" \
+       "./deploy.sh gitlab yourself if you deliberately want a fresh snapshot)"
+    return 0
+  fi
+  info "seeding GitLab for the first time: automation token, group/project ${GITLAB_PROJECT_PATH}, repo push"
   "${ROOT_DIR}/deploy.sh" gitlab 2>&1 | grep -E 'OK|WARN|ERROR' || true
   oc get secret gitlab-automation-token -n gitlab >/dev/null 2>&1 \
     || { warn "GitLab seeding did not produce an automation token: oc get pods -n gitlab, then ./deploy.sh gitlab"; return 1; }
@@ -478,6 +520,39 @@ EOF
   ok "GitLab webhook: pushes to ${GITLAB_PROJECT_PATH} (main, app/coffee-menu/) start the pipeline"
 }
 
+# Pushes just these files to GitLab as one small additive commit on top of whatever is already on
+# main -- NOT the full-repo-reseed-and-force-push './deploy.sh gitlab' does -- so this is safe to
+# call on every `tssc setup` run without discarding any commits (signed or not) made since the
+# project was first seeded. Skips entirely (no commit at all) if GitLab already has identical
+# content for every path given. Used to propagate the handful of files Dev Spaces actually
+# depends on even on a cluster where ensure_gitlab() has (correctly) stopped doing the full
+# snapshot push because the project already exists.
+gitlab_push_files() {  # gitlab_push_files <commit-message> <repo-relative-path>...
+  local msg=$1; shift
+  oc get secret gitlab-automation-token -n gitlab >/dev/null 2>&1 \
+    || { warn "no GitLab automation token: skipping push of $* (run ./deploy.sh tssc setup to auto-provision GitLab)"; return 1; }
+  local pid; pid=$(gitlab_api GET "/projects/${GITLAB_PROJECT_PATH//\//%2F}" | jq -r '.id // empty')
+  [[ -n "$pid" ]] || { warn "GitLab project ${GITLAB_PROJECT_PATH} not found: ./deploy.sh gitlab, then rerun"; return 1; }
+  local path local_content remote_content action actions_json="[]"
+  for path in "$@"; do
+    local_content=$(cat "${ROOT_DIR}/${path}")
+    remote_content=$(gitlab_api GET "/projects/${pid}/repository/files/${path//\//%2F}/raw?ref=main" 2>/dev/null || true)
+    [[ "$local_content" == "$remote_content" ]] && continue
+    [[ -n "$remote_content" ]] && action=update || action=create
+    actions_json=$(jq --arg action "$action" --arg path "$path" --arg content "$local_content" \
+      '. += [{action: $action, file_path: $path, content: $content}]' <<<"$actions_json")
+  done
+  if [[ "$(jq 'length' <<<"$actions_json")" == 0 ]]; then
+    ok "GitLab already has the current content for: $*"
+    return 0
+  fi
+  local payload; payload=$(jq -n --arg branch main --arg msg "$msg" --argjson actions "$actions_json" \
+    '{branch: $branch, commit_message: $msg, actions: $actions}')
+  gitlab_api POST "/projects/${pid}/repository/commits" "$payload" | jq -e '.id' >/dev/null \
+    && ok "pushed to GitLab (${msg}): $*" \
+    || warn "could not push $* to GitLab: check ./deploy.sh gitlab"
+}
+
 signing_env() {
   step "Signing settings for Dev Spaces (stack/tssc/generated/signing.env)"
   mkdir -p "$(dirname "$SIGNING_ENV")"
@@ -493,14 +568,13 @@ CLI_SERVER=${CLI_SERVER}
 SIGNER_IDENTITY=${SIGNER}
 EOF
   ok "written"
-  # ensure_gitlab (called earlier in setup()) guarantees the token normally; the check stays as a
-  # defensive no-op for direct/partial invocations (e.g. a lone `tssc.sh` function call in a repl).
-  if oc get secret gitlab-automation-token -n gitlab >/dev/null 2>&1; then
-    info "pushing the repository (incl. devfile.yaml and signing.env) to GitLab"
-    "${ROOT_DIR}/deploy.sh" gitlab | grep -E 'OK|WARN|ERROR' || true
-  else
-    warn "no GitLab automation token: skipping repo push (run ./deploy.sh tssc setup to auto-provision GitLab)"
-  fi
+  info "pushing the Dev Spaces files (devfile.yaml, signing scripts, signing.env) to GitLab -- a small additive commit, not a full reseed"
+  gitlab_push_files "tssc setup: update Dev Spaces signing config" \
+    devfile.yaml \
+    stack/tssc/devspaces/sign-setup.sh \
+    stack/tssc/devspaces/sign-commit.sh \
+    stack/tssc/devspaces/verify-commit.sh \
+    stack/tssc/generated/signing.env
 }
 
 # ----------------------------------------------------------------------------- commands

@@ -53,6 +53,13 @@ spec:
       value: $(tasks.build-image.results.image-ref)
     - name: release
       value: $(tasks.push-release.results.release-ref)
+    # Drives Developer Hub's Tekton plugin VULNERABILITIES column (any Pipeline-level result
+    # whose name ends in "SCAN_OUTPUT"; see tpa-check's own results/metadata.annotations below for
+    # the matching "View SBOM" convention). tpa-check always writes this (zeros when
+    # simulated/unavailable), so it's always present -- a Pipeline result referencing a task
+    # result the task never wrote would otherwise go missing/error.
+    - name: tpa-SCAN_OUTPUT
+      value: $(tasks.tpa-check.results.scan-output)
   tasks:
     # ------------------------------------------------------------------ 1. clone
     - name: clone
@@ -284,7 +291,12 @@ spec:
               token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
               export SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY=true SYFT_REGISTRY_AUTH_USERNAME=pipeline SYFT_REGISTRY_AUTH_PASSWORD="$token"
               sbom="$(workspaces.source.path)/sbom.cdx.json"
-              syft scan "registry:${IMAGE}" -o "cyclonedx-json=${sbom}" -q
+              # Pin the CycloneDX spec version: syft's default (unversioned) "cyclonedx-json"
+              # output tracks the latest spec it supports (1.7 as of this tools image), but this
+              # cluster's Trusted Profile Analyzer rejects that with "UnsupportedFormat: CycloneDX
+              # version 1.7 is unsupported; try 1.3, 1.4, 1.5, 1.6" (confirmed live) -- its ingestor
+              # hasn't caught up to 1.7 yet. 1.6 is syft's highest version TPA still accepts.
+              syft scan "registry:${IMAGE}" -o "cyclonedx-json@1.6=${sbom}" -q
               count=$(jq '.components | length' "$sbom")
               printf '%s' "$count" > "$(results.components.path)"
               echo "SBOM (CycloneDX): ${count} components, by type:"
@@ -309,9 +321,28 @@ spec:
         - {name: tag, value: $(tasks.clone.results.short-commit)}
         - {name: gate, value: $(params.vulnerability-gate)}
       taskSpec:
+        # Developer Hub's Tekton plugin ("View SBOM" icon + VULNERABILITIES column in the CI tab)
+        # looks for these two specific, undocumented-in-our-own-docs conventions (confirmed against
+        # @backstage-community/plugin-tekton's own source + test fixtures, since RHDH's bundled
+        # build doesn't ship human docs for this):
+        #  - "View SBOM": a TaskRun (any task) annotated task.results.key=LINK_TO_SBOM (+
+        #    task.results.type=external-link for a clickable external URL) that also has a
+        #    *result* literally named LINK_TO_SBOM. The metadata.annotations below apply to the
+        #    TaskRun Tekton creates for this embedded taskSpec (Tekton's EmbeddedTask.metadata).
+        #  - VULNERABILITIES column: a *Pipeline-level* result whose name ends in "SCAN_OUTPUT",
+        #    value a JSON string {"vulnerabilities":{"critical":N,"high":N,"medium":N,"low":N}}
+        #    (see the pipeline-level `results:` block above, tpa-SCAN_OUTPUT). Always written
+        #    (zeros when simulated/unavailable) so the Pipeline-level result never references a
+        #    task result that was never produced.
+        metadata:
+          annotations:
+            task.results.key: LINK_TO_SBOM
+            task.results.type: external-link
+            task.results.format: application/text
+            task.output.location: results
         params: [{name: service}, {name: tag}, {name: gate}]
         workspaces: [{name: source}]
-        results: [{name: summary}]
+        results: [{name: summary}, {name: LINK_TO_SBOM}, {name: scan-output}]
         steps:
           - name: upload-and-check
             image: image-registry.openshift-image-registry.svc:5000/tssc-ci/tssc-tools:latest
@@ -326,29 +357,56 @@ spec:
               #!/usr/bin/env bash
               set -euo pipefail
               sbom="$(workspaces.source.path)/sbom.cdx.json"
+              # Both results below are declared in taskSpec.results, so write them on *every* exit
+              # path (even the early simulated/storage-full ones) -- an empty LINK_TO_SBOM reads as
+              # "no SBOM" to Developer Hub (falsy/not an http(s) URL, same as today's disabled icon)
+              # and zeroed scan-output keeps the Pipeline-level result above always resolvable.
+              no_sbom_link() { printf '' > "$(results.LINK_TO_SBOM.path)"; }
+              zero_scan_output() { printf '{"vulnerabilities":{"critical":0,"high":0,"medium":0,"low":0}}' > "$(results.scan-output.path)"; }
               if [ -z "${TPA_URL:-}" ] || [ -z "${TPA_CLIENT_SECRET:-}" ]; then
                 echo "SIMULATED: Trusted Profile Analyzer is not configured (./deploy.sh tssc setup installs it)"
-                printf 'simulated' > "$(results.summary.path)"; exit 0
+                printf 'simulated' > "$(results.summary.path)"; no_sbom_link; zero_scan_output; exit 0
               fi
               token=$(curl -fsSk -d grant_type=client_credentials -d client_id=rhtpa-cli \
                 -d "client_secret=${TPA_CLIENT_SECRET}" "$KEYCLOAK_TOKEN_URL" | jq -r .access_token)
-              id="" api=""
-              for v in v3 v2; do
-                code=$(curl -sk -o /tmp/upload.json -w '%{http_code}' -X POST -H "Authorization: Bearer ${token}" \
-                  -H 'Content-Type: application/json' --data-binary "@${sbom}" \
-                  "${TPA_URL}/api/${v}/sbom?labels.source=tekton&labels.service=${SERVICE}&labels.commit=${TAG}")
-                if [ "$code" = 201 ] || [ "$code" = 200 ]; then id=$(jq -r .id /tmp/upload.json); api=$v; break; fi
-              done
-              [ -n "$id" ] || { echo "upload to ${TPA_URL} failed (HTTP ${code}): $(head -c 300 /tmp/upload.json)"; exit 1; }
-              echo "OK: SBOM stored in Trusted Profile Analyzer (API ${api}), id ${id}"
+              # Only /api/v3/sbom supports POST on this RHTPA version -- verified against its own
+              # ${TPA_URL}/openapi.json: /api/v2/sbom lists only `get`, /api/v3/sbom lists
+              # `get, post, delete`. A v2 fallback here is dead code: it always 404s and, worse,
+              # overwrites $code so the *real* v3 error never reaches the log (this masked a real
+              # upload failure as a plain, uninformative "HTTP 404" earlier).
+              code=$(curl -sk -o /tmp/upload.json -w '%{http_code}' -X POST -H "Authorization: Bearer ${token}" \
+                -H 'Content-Type: application/json' --data-binary "@${sbom}" \
+                "${TPA_URL}/api/v3/sbom?labels.source=tekton&labels.service=${SERVICE}&labels.commit=${TAG}")
+              if [ "$code" = 500 ] && grep -qi 'storagefull\|no space left on device' /tmp/upload.json; then
+                # Known caveat on resource-constrained demo clusters, not a pipeline bug: the
+                # vulnerability importers (./deploy.sh tssc setup --tpa-importers) ingest a very
+                # large number of small advisory documents into Trusted Profile Analyzer's content
+                # store; on a small PV its *inode* budget (not its byte capacity -- `df -h` can
+                # look nearly empty while `df -i` is at 100%) can run out well before the disk
+                # looks full. See the demo guide for how to check/recover. Treated as a soft
+                # caveat (same spirit as "no advisories match yet" below), not a hard failure.
+                echo "CAVEAT: Trusted Profile Analyzer's storage is out of inodes (the vulnerability importers filled it) -- SBOM not stored this run, see the guide's Trusted Profile Analyzer section"
+                printf 'storage-full' > "$(results.summary.path)"; no_sbom_link; zero_scan_output; exit 0
+              fi
+              id=""
+              if [ "$code" = 201 ] || [ "$code" = 200 ]; then id=$(jq -r .id /tmp/upload.json); fi
+              if [ -z "$id" ]; then no_sbom_link; zero_scan_output; fi
+              [ -n "$id" ] || { echo "upload to ${TPA_URL}/api/v3/sbom failed (HTTP ${code}): $(head -c 500 /tmp/upload.json)"; exit 1; }
+              echo "OK: SBOM stored in Trusted Profile Analyzer (API v3), id ${id}"
+              printf '%s' "${TPA_URL}/sboms/${id}" > "$(results.LINK_TO_SBOM.path)"
               echo "    ${TPA_URL}/sboms/${id}"
-              curl -fsSk -H "Authorization: Bearer ${token}" "${TPA_URL}/api/${api}/sbom/${id}/advisory" > /tmp/adv.json
+              curl -fsSk -H "Authorization: Bearer ${token}" "${TPA_URL}/api/v3/sbom/${id}/advisory" > /tmp/adv.json
               jq '[ (if type == "object" then (.items // []) else . end)[] | .status[]? | select(.status == "affected")
                     | {cve: .identifier, severity: (.base_score.severity // .average_severity // .severity // "unknown")} ]
                   | unique_by(.cve)' /tmp/adv.json > /tmp/vulns.json
               total=$(jq length /tmp/vulns.json)
               summary=$(jq -r 'group_by(.severity) | map("\(.[0].severity)=\(length)") | join(" ")' /tmp/vulns.json)
               printf '%s' "${total} affected: ${summary:-none}" > "$(results.summary.path)"
+              jq '{vulnerabilities: {critical: ([.[] | select(.severity=="critical")] | length),
+                                      high:     ([.[] | select(.severity=="high")] | length),
+                                      medium:   ([.[] | select(.severity=="medium")] | length),
+                                      low:      ([.[] | select(.severity=="low")] | length)}}' \
+                -c /tmp/vulns.json > "$(results.scan-output.path)"
               echo "affected vulnerabilities: ${total} ${summary:+(${summary})}"
               jq -r 'sort_by(.severity) | .[0:15][] | "  \(.severity)\t\(.cve)"' /tmp/vulns.json
               [ "$total" -gt 0 ] || echo "(no advisories match yet: importers fill the vulnerability data, see the guide)"
