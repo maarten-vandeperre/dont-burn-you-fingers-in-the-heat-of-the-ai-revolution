@@ -220,8 +220,18 @@ rhtpa() {
   values=$(mktemp); sed "s#__ISSUER__#${OIDC_ISSUER}#g" "${TSSC_DIR}/rhtpa/values-rhtpa.yaml" > "$values"
   if [[ "$TPA_IMPORTERS" == true ]]; then
     importer_flags=(--set modules.createImporters.importers.osv-github.osv.disabled=false
-                    --set modules.createImporters.importers.cve.cve.disabled=false)
-    info "vulnerability importers ON (CVE list + GitHub advisories: several GB, first import takes hours)"
+                    --set modules.createImporters.importers.cve.cve.disabled=false
+                    --set modules.createImporters.importers.redhat-csaf.csaf.disabled=false)
+    # redhat-csaf matters specifically: cve (CVEProject/cvelistV5) and osv-github (GitHub Advisory
+    # Database) cover language-ecosystem packages (npm, Maven, PyPI, Go...) but NOT the rpm
+    # ecosystem at all -- and a typical container image's SBOM is mostly base-image RHEL RPMs.
+    # redhat-csaf is Red Hat's own CVE-to-RPM-version VEX/errata data, the only enabled-by-this-flag
+    # source that can ever match those packages. Without it, tpa-check's vulnerability count will
+    # show 0 for RPM-heavy images no matter how long cve/osv run -- confirmed live: with only
+    # cve+osv enabled, direct purl lookups for e.g. bash/curl RPMs in a real SBOM returned 0
+    # advisories (not a bug, just the wrong/incomplete sources), while coffee-menu's few Maven
+    # packages *did* get a real (zero) answer from osv-github.
+    info "vulnerability importers ON (CVE list + GitHub advisories + Red Hat CSAF/VEX: several GB, first import takes hours)"
     # The chart's own default (modules.importer.resources.requests: 1 CPU / 8Gi memory) is sized
     # for a dedicated prod node, not a small demo cluster — and the importer Deployment has a
     # *required* pod affinity to co-locate with the "server" pod (same hostname), so it can only

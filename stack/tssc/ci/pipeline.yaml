@@ -396,8 +396,17 @@ spec:
               printf '%s' "${TPA_URL}/sboms/${id}" > "$(results.LINK_TO_SBOM.path)"
               echo "    ${TPA_URL}/sboms/${id}"
               curl -fsSk -H "Authorization: Bearer ${token}" "${TPA_URL}/api/v3/sbom/${id}/advisory" > /tmp/adv.json
+              # Severity lives at .scores[].severity (one entry per CVSS version RHTPA has for that
+              # CVE, e.g. 3.1 and 4.0 can both be present) -- NOT .base_score/.average_severity/
+              # .severity, which don't exist on this API's actual response shape (confirmed live:
+              # every status entry has .scores as an array, .base_score is always null). Picking any
+              # single .scores[] entry risks silently under-reporting if a higher-severity score
+              # exists under a different CVSS version, so rank all of them and keep the worst.
               jq '[ (if type == "object" then (.items // []) else . end)[] | .status[]? | select(.status == "affected")
-                    | {cve: .identifier, severity: (.base_score.severity // .average_severity // .severity // "unknown")} ]
+                    | {cve: .identifier,
+                       severity: (([.scores[]?.severity] + ["unknown"]) as $sevs
+                                  | ($sevs | map({critical:4,high:3,medium:2,low:1,unknown:0}[.] // 0)) as $ranks
+                                  | $sevs[$ranks | index(max)]) } ]
                   | unique_by(.cve)' /tmp/adv.json > /tmp/vulns.json
               total=$(jq length /tmp/vulns.json)
               summary=$(jq -r 'group_by(.severity) | map("\(.[0].severity)=\(length)") | join(" ")' /tmp/vulns.json)
@@ -410,6 +419,12 @@ spec:
               echo "affected vulnerabilities: ${total} ${summary:+(${summary})}"
               jq -r 'sort_by(.severity) | .[0:15][] | "  \(.severity)\t\(.cve)"' /tmp/vulns.json
               [ "$total" -gt 0 ] || echo "(no advisories match yet: importers fill the vulnerability data, see the guide)"
+              # This is a point-in-time scan: importers keep ingesting in the background after this
+              # task returns, so a later re-scan of the same image can find more. Best-effort, never
+              # fails the task: note any importer that hasn't finished its first full pass yet.
+              stale=$(curl -fsSk -H "Authorization: Bearer ${token}" "${TPA_URL}/api/v3/importer" 2>/dev/null \
+                | jq -r '[.[] | select(.configuration[].disabled == false and .lastSuccess == null) | .name] | join(", ")' 2>/dev/null || true)
+              [ -z "$stale" ] || echo "note: importer(s) still on their first pass (${stale}) -- counts above may increase on a later re-scan"
               blocking=$(jq '[.[] | select(.severity == "critical" or .severity == "high")] | length' /tmp/vulns.json)
               if [ "$blocking" -gt 0 ] && [ "$GATE" = "fail" ]; then
                 echo "STOP: ${blocking} critical/high vulnerabilities (vulnerability-gate=fail)"; exit 1

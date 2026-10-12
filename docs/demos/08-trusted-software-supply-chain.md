@@ -28,7 +28,7 @@ Every step below has three parts: **Do** (what you click, type or open), **You s
 | Static analysis, unit tests, integration tests (run in parallel) | **MOCK**: always simulated, see "Why these three are mocked" below |
 | Image build (podman), push | **real** |
 | Image signature, SBOM, SBOM attestation | **real**: cosign, syft, Rekor |
-| Trusted Profile Analyzer check and CVE report | **real** when RHTPA is installed (needs `helm`), otherwise **SIMULATED** |
+| Trusted Profile Analyzer check and CVE report | **real** when RHTPA is installed (needs `helm`), otherwise **SIMULATED**. `0` affected vulnerabilities right after setup is expected, not a bug — see "If something goes wrong" |
 | Advanced Cluster Security checks | **SIMULATED** from real facts, unless Secret `acs-central` exists (then real `roxctl`) — a bonus step, not asked for by name but useful to show policy-as-code |
 | Argo CD sync | **MOCK** by default; becomes real once the Argo CD app `ai-demo` exists (`./deploy.sh app gitops <url>`) |
 | Developer Hub catalog item, CI tab | **real**: live PipelineRuns from this cluster |
@@ -261,8 +261,49 @@ Nothing to reset: every run creates new artifacts. To start the pipeline without
 * **Keycloak says "Invalid parameter: redirect_uri":** rerun `./deploy.sh tssc setup` (it registers
   `urn:ietf:wg:oauth:2.0:oob` on client `trusted-artifact-signer`).
 * **tpa-check says SIMULATED:** RHTPA is not installed (`helm` missing during setup).
-* **No advisories in TPA:** the vulnerability importers are off by default:
+* **tpa-check succeeds but reports `affected vulnerabilities: 0`, every image, every time:** expected
+  right after `--tpa-importers`, not a bug. Three importers feed RHTPA: `cve` (raw CVE list) and
+  `osv-github` (GitHub Advisory Database — covers Maven/npm/PyPI/Go-style ecosystems) finish within
+  hours; `redhat-csaf` (Red Hat's own CVE-to-RPM-version data) is the **only one of the three that
+  can ever match a plain RHEL package**, is the slowest, and matters most since most container
+  images are mostly base-OS RPMs. Check real progress: get a token the same way `tpa-check`'s script
+  does (Secret `oidc-cli` in `trusted-profile-analyzer`), then
+  `curl -sk -H "Authorization: Bearer $TOKEN" "$TPA_URL/api/v3/importer" | jq '.[] | {name, state, lastSuccess, progress}'`.
+  Until `redhat-csaf`'s `lastSuccess` is set (its first pass covers tens of thousands of documents
+  and takes several hours), a `0` for an RPM-heavy image just means it hasn't caught up yet — re-run
+  `./deploy.sh tssc run` once it has.   A quick sanity check that RHTPA itself isn't empty:
+  `curl -sk -H "Authorization: Bearer $TOKEN" "$TPA_URL/api/v3/advisory?limit=0&total=true"` should
+  already show hundreds of thousands once `cve`/`osv-github` have run at least once. Note: re-running
+  `./deploy.sh tssc setup --tpa-importers` always briefly scales `server`/`importer` to 0 and back
+  (a chart-bug workaround, see `rhtpa()` in `tssc.sh`) — safe, but it reaps and restarts whichever
+  importer pass was in flight, so re-running setup repeatedly while `redhat-csaf`'s first pass is
+  still running delays it further; let it finish (`lastSuccess` set) before re-running setup again.
+* **tpa-check fails with a storage error (`StorageFull` / "No space left on device"), even though
+  `df -h` on the PVC looks far from full:** RHTPA's `storage` PVC is ext4, whose *inode* budget is
+  fixed at filesystem-creation time in proportion to its *byte* size — the importers' hundreds of
+  thousands of small files can exhaust that inode budget long before the byte capacity fills
+  (confirmed live: `df -h` showed 40% used while `df -i` showed 100%). Always check `df -ih`, not
+  `df -h`, on this PVC. `tssc.sh`'s `rhtpa()` now provisions 20Gi (not the chart's 10Gi default) and
+  self-heals an existing too-small PVC by growing it on the next `tssc setup` run — growing an ext4
+  filesystem allocates proportionally more inodes too (confirmed live: 10Gi→20Gi took free inodes
+  from 0 to 640K). If it ever recurs at a larger scale, the same fix applies by hand: `oc patch pvc
+  storage -n trusted-profile-analyzer --type merge -p '{"spec":{"resources":{"requests":{"storage":"<bigger>"}}}}'`,
+  then delete the `server` pod so the resize completes (it stays `FileSystemResizePending` until a
+  pod remounts the volume).
+* **No advisories in TPA at all:** the vulnerability importers are off by default:
   `./deploy.sh tssc setup --tpa-importers` (the first import takes hours).
+* **Developer Hub's VULNERABILITIES badge shows all zeros, but RHTPA's own SBOM page shows real
+  severities for the same SBOM:** `tpa-check`'s own log line settles this — if it says
+  `affected vulnerabilities: N (unknown=N)`, this was a real bug (now fixed): severity lives at
+  RHTPA's `.scores[].severity` on each advisory, not `.base_score`/`.average_severity`/`.severity`
+  (those don't exist on this API's actual response shape), so every match fell into an uncounted
+  "unknown" bucket while the total stayed correct. If the log already shows real severities
+  (`high=N medium=N ...`) but the number is lower than what RHTPA's UI now shows for a re-opened
+  SBOM, that's expected staleness, not a bug: `tpa-check` queries once, at upload time; importers
+  (especially `redhat-csaf`, see above) keep ingesting afterwards, so the same SBOM can show more
+  matches later. The task's log says so explicitly when it applies: `note: importer(s) still on
+  their first pass (...) -- counts above may increase on a later re-scan`. Re-run the pipeline
+  (`./deploy.sh tssc run`) for an updated count once an importer's `lastSuccess` is set.
 * **GitLab shows the commit as "Unverified":** GitLab does not trust this cluster's Fulcio CA; the
   pipeline's `gitsign verify` against Trusted Artifact Signer is the check that counts here.
 * **No CI tab, or it is empty, on `coffee-menu-tssc` in Developer Hub:** `./deploy.sh rhdh` after
