@@ -1,0 +1,45 @@
+# The one AnalysisTemplate shared by the two "with analysis" demos (bluegreen-analysis-demo's
+# prePromotionAnalysis and canary-analysis-demo's per-step analysis). No Prometheus/Thanos
+# dependency on purpose, so the whole tutorial works on any cluster that has Argo Rollouts and
+# OpenShift Pipelines: the "metric" is a Kubernetes Job that curls the given Service's /color
+# endpoint and checks for HTTP 200. `fail=true` is the presenter's "break it" switch: the Job
+# exits 1 immediately, Argo Rollouts marks the AnalysisRun Failed, and:
+#   - bluegreen-analysis-demo never flips the active Service to the new version
+#   - canary-analysis-demo aborts the rollout and scales the canary back to 0
+# both automatically, no human in the loop. See docs/demos/09-argo-rollouts.md.
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: smoke-test
+  namespace: rollouts-demo
+spec:
+  args:
+    - name: service-url   # e.g. http://canary-analysis-demo-canary.rollouts-demo.svc.cluster.local:8080
+    - name: fail
+      value: "false"
+  metrics:
+    - name: smoke-test
+      count: 1
+      failureLimit: 0
+      provider:
+        job:
+          spec:
+            backoffLimit: 0
+            ttlSecondsAfterFinished: 300   # clean up the Job pods automatically, a few minutes after they finish
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: smoke-test
+                    image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+                    command: ["/bin/bash", "-c"]
+                    args:
+                      - |
+                        set -e
+                        echo "smoke test: {{args.service-url}}/color (fail={{args.fail}})"
+                        if [ "{{args.fail}}" = "true" ]; then
+                          echo "simulated failure requested by the presenter"; exit 1
+                        fi
+                        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "{{args.service-url}}/color")
+                        echo "HTTP ${code}"
+                        [ "$code" = "200" ]

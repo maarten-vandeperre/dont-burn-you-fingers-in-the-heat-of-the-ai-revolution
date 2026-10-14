@@ -1,0 +1,77 @@
+# The deployment pipeline for this tutorial: it releases a new color to one of the four Rollouts
+# and, for the two "with analysis" ones, can arm the smoke test to fail on purpose. Triggered with
+#   ./demo.sh argorollouts pipeline <target> [color] [fail]
+# PipelineRuns are labelled per target so each shows up in its own component's CI tab in
+# Developer Hub (same convention as app/deploy/pipelines/pipeline.yaml). Uses the ClusterTasks
+# OpenShift Pipelines ships (namespace openshift-pipelines) and the namespace's default "pipeline"
+# ServiceAccount, which already carries "edit" (and therefore get/patch on rollouts) -- no extra
+# RBAC needed for the pipeline itself (see rbac.yaml for the separate Developer Hub identity).
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: rollouts-release
+spec:
+  params:
+    - name: target
+      type: string
+      description: canary-demo | bluegreen-demo | bluegreen-analysis-demo | canary-analysis-demo
+    - name: color
+      type: string
+      default: yellow
+      description: docker.io/argoproj/rollouts-demo tag to deploy (blue | yellow | green | red)
+    - name: simulate-failure
+      type: string
+      default: "false"
+      description: 'true arms the smoke-test AnalysisTemplate to fail (bluegreen-analysis-demo / canary-analysis-demo only)'
+  tasks:
+    - name: release
+      taskRef:
+        resolver: cluster
+        params:
+          - {name: kind, value: task}
+          - {name: name, value: openshift-client}
+          - {name: namespace, value: openshift-pipelines}
+      params:
+        - name: SCRIPT
+          value: |
+            set -euo pipefail
+            echo "releasing $(params.target) -> docker.io/argoproj/rollouts-demo:$(params.color)"
+            oc patch rollout "$(params.target)" -n rollouts-demo --type=json -p \
+              '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"docker.io/argoproj/rollouts-demo:$(params.color)"}]'
+            case "$(params.target)" in
+              canary-analysis-demo)
+                echo "arming the post-promotion smoke test: fail=$(params.simulate-failure)"
+                oc patch rollout canary-analysis-demo -n rollouts-demo --type=json -p \
+                  '[{"op":"replace","path":"/spec/strategy/canary/steps/1/analysis/args/1/value","value":"$(params.simulate-failure)"},
+                    {"op":"replace","path":"/spec/strategy/canary/steps/4/analysis/args/1/value","value":"$(params.simulate-failure)"}]'
+                ;;
+              bluegreen-analysis-demo)
+                echo "arming the pre-promotion smoke test: fail=$(params.simulate-failure)"
+                oc patch rollout bluegreen-analysis-demo -n rollouts-demo --type=json -p \
+                  '[{"op":"replace","path":"/spec/strategy/blueGreen/prePromotionAnalysis/args/1/value","value":"$(params.simulate-failure)"}]'
+                ;;
+            esac
+    - name: wait-for-rollout
+      runAfter: [release]
+      taskRef:
+        resolver: cluster
+        params:
+          - {name: kind, value: task}
+          - {name: name, value: openshift-client}
+          - {name: namespace, value: openshift-pipelines}
+      params:
+        - name: SCRIPT
+          value: |
+            set -uo pipefail
+            for i in $(seq 1 30); do
+              phase=$(oc get rollout "$(params.target)" -n rollouts-demo -o jsonpath='{.status.phase}' 2>/dev/null || true)
+              step=$(oc get rollout "$(params.target)" -n rollouts-demo -o jsonpath='{.status.currentStepIndex}' 2>/dev/null || true)
+              echo "$(date +%H:%M:%S)  phase=${phase:-Unknown}  step=${step:-n/a}"
+              case "$phase" in
+                Healthy) echo "rollout is Healthy"; exit 0 ;;
+                Degraded) echo "rollout is Degraded (analysis failed or the release was aborted)"; exit 1 ;;
+              esac
+              sleep 10
+            done
+            echo "timed out waiting for $(params.target) to settle (blue-green without analysis needs a manual promote: ./demo.sh argorollouts promote $(params.target))"
+            exit 0

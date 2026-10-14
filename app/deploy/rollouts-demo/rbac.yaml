@@ -1,0 +1,25 @@
+# Lets the existing Developer Hub template identity (stack/developer-hub/rbac.yaml,
+# ServiceAccount rhdh-platform-actions in namespace rhdh) also release / promote / abort / retry
+# the four Rollouts in this project. Same identity, same token already in Developer Hub's
+# rhdh-secrets Secret -- only a RoleBinding is added here, scoped to this namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rhdh-platform-actions
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [rollouts, rollouts/status]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rhdh-platform-actions
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rhdh-platform-actions
+subjects:
+  - kind: ServiceAccount
+    name: rhdh-platform-actions
+    namespace: rhdh

@@ -1,0 +1,79 @@
+# Changes the bluegreen-analysis-demo Rollout through the /platform-actions proxy. The cutover is
+# automatic once the smoke test (AnalysisTemplate "smoke-test") passes -- "Simulate a failure"
+# arms it to fail on purpose so you can show the active Service never moving.
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: rollouts-bluegreen-analysis
+  title: "Argo Rollouts: blue-green release (pre-promotion analysis)"
+  description: Release a new color; the active Service only moves once the smoke test against the preview passes
+  tags: [argo-rollouts, blue-green, analysis]
+spec:
+  owner: platform-team
+  type: platform-action
+  parameters:
+    - title: Action
+      required: [action]
+      properties:
+        action:
+          title: Action
+          type: string
+          default: release
+          enum: [release, abort, retry]
+          enumNames: ["Release a new color", "Abort (active never moves)", "Retry an aborted release"]
+        color:
+          title: Color
+          type: string
+          default: yellow
+          enum: [blue, yellow, green, red]
+          ui:help: Only used for "Release". docker.io/argoproj/rollouts-demo:<color>
+        simulateFailure:
+          title: Simulate a failure
+          type: boolean
+          default: false
+          ui:help: Arms the smoke test to fail on purpose, so the cutover is automatically refused. Only used for "Release".
+  steps:
+    - id: arm
+      if: ${{ parameters.action === 'release' }}
+      name: Arm/disarm the smoke test
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/argoproj.io/v1alpha1/namespaces/rollouts-demo/rollouts/bluegreen-analysis-demo
+        headers:
+          content-type: application/json-patch+json
+        body: '[{"op":"replace","path":"/spec/strategy/blueGreen/prePromotionAnalysis/args/1/value","value":"${{ parameters.simulateFailure }}"}]'
+    - id: release
+      if: ${{ parameters.action === 'release' }}
+      name: New color (preview, then auto-promoted if the smoke test passes)
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/argoproj.io/v1alpha1/namespaces/rollouts-demo/rollouts/bluegreen-analysis-demo
+        headers:
+          content-type: application/json-patch+json
+        body: '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"docker.io/argoproj/rollouts-demo:${{ parameters.color }}"}]'
+    - id: abort
+      if: ${{ parameters.action === 'abort' }}
+      name: Abort
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/argoproj.io/v1alpha1/namespaces/rollouts-demo/rollouts/bluegreen-analysis-demo/status
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"status":{"abort":true}}'
+    - id: retry
+      if: ${{ parameters.action === 'retry' }}
+      name: Retry
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/argoproj.io/v1alpha1/namespaces/rollouts-demo/rollouts/bluegreen-analysis-demo/status
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"status":{"abort":false}}'
+  output:
+    links:
+      - title: rollouts-bluegreen-analysis in the catalog
+        entityRef: component:default/rollouts-bluegreen-analysis

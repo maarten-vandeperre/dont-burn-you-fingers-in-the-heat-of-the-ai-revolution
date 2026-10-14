@@ -10,9 +10,14 @@ spec:
     - ./models.yaml
     - ./ai-demo.yaml
     - ./apis.yaml
+    - ./argo-rollouts-demo.yaml
     - ./template-traffic-pattern.yaml
     - ./template-model-router-rollout.yaml
     - ./template-scale-service.yaml
     - ./template-scale-model.yaml
     - ./template-coffee-menu-traffic.yaml
+    - ./template-rollouts-canary.yaml
+    - ./template-rollouts-bluegreen.yaml
+    - ./template-rollouts-bluegreen-analysis.yaml
+    - ./template-rollouts-canary-analysis.yaml
     - ./software-templates.yaml

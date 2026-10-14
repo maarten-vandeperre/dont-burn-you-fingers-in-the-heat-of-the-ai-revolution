@@ -15,6 +15,7 @@ demo takes 5 to 10 minutes and works on its own; all of them use the same runnin
 | [5. Observability](05-observability.md) | One trace across all services, token metrics, dashboard, alerts |
 | [6. Developer Hub](06-developer-hub.md) | The platform as a catalog, sign-in with Keycloak, source in GitLab, changing it with templates |
 | [8. Trusted software supply chain](08-trusted-software-supply-chain.md) | Signed commit in Dev Spaces (gitsign + Trusted Artifact Signer), pipeline: verify, CI, sign, SBOM, Trusted Profile Analyzer, ACS checks, release, Argo CD |
+| [9. Argo Rollouts](09-argo-rollouts.md) | Four strategies standalone: canary, blue-green, blue-green with pre-promotion analysis, canary with post-promotion analysis; Tekton pipeline, Developer Hub day-2 actions |
 | [Guarded Coffee](../../app/coffee-guardrails/DEMO.md) | NeMo Guardrails (TrustyAI) on the laptop: coffee only, 200 character limits, PII masking, no cappuccino after noon; same config on OpenShift AI |
 | [Camel on the laptop](../../app/camel-ai-demo/README.md) | Local Camel demo: one API for Qwen (Podman AI Lab), OpenAI and Anthropic, files, live routes, Kaoto and Hawtio |
 | [7. Platform Coffee](07-coffee-shop.md) | One app, every capability: AI ordering, menu releases and chaos in the mesh, CDC audit trail |
@@ -36,6 +37,7 @@ export OPENAI_API_KEY=sk-...           # optional, enables "openai" and the fall
 ./deploy.sh stack                      # platform, 30 to 45 min
 ./deploy.sh app all                    # demo apps incl. the coffee shop, about 15 min
 ./deploy.sh app deploy --rollouts      # only for the Argo Rollouts part of demo 3
+./deploy.sh app argorollouts deploy    # only for demo 9 (standalone canary/blue-green tutorial)
 ./deploy.sh urls; ./deploy.sh app urls # all URLs
 ```
 

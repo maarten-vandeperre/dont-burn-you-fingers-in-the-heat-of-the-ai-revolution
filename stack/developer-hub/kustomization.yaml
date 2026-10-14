@@ -32,11 +32,16 @@ configMapGenerator:
       - catalog/models.yaml
       - catalog/ai-demo.yaml
       - catalog/apis.yaml
+      - catalog/argo-rollouts-demo.yaml
       - catalog/template-traffic-pattern.yaml
       - catalog/template-model-router-rollout.yaml
       - catalog/template-scale-service.yaml
       - catalog/template-scale-model.yaml
       - catalog/template-coffee-menu-traffic.yaml
+      - catalog/template-rollouts-canary.yaml
+      - catalog/template-rollouts-bluegreen.yaml
+      - catalog/template-rollouts-bluegreen-analysis.yaml
+      - catalog/template-rollouts-canary-analysis.yaml
       - catalog/software-templates.yaml
     options:
       disableNameSuffixHash: true

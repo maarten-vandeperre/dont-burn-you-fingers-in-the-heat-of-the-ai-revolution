@@ -1,0 +1,98 @@
+# 3. BLUE-GREEN WITH (PRE-PROMOTION) ANALYSIS. Same two-Service blue-green as bluegreen.yaml, but
+# the cutover itself is no longer a human decision: prePromotionAnalysis runs the shared
+# smoke-test AnalysisTemplate (analysis-template.yaml) against the PREVIEW service before the
+# active Service is allowed to move. autoPromotionEnabled: true here on purpose -- the analysis
+# *is* the gate. Pass -> active flips automatically. Fail -> active never moves, no human needed
+# to stop a bad release either.
+#
+# Run it (healthy):  ./demo.sh argorollouts bluegreen-analysis [color]
+# Run it (bad):       ./demo.sh argorollouts bluegreen-analysis red true
+# Watch it:           oc get analysisrun -n rollouts-demo -w
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: bluegreen-analysis-demo
+  namespace: rollouts-demo
+  labels:
+    app: bluegreen-analysis-demo
+    backstage.io/kubernetes-id: rollouts-bluegreen-analysis
+    app.kubernetes.io/part-of: rollouts-demo
+spec:
+  replicas: 3
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: bluegreen-analysis-demo
+  strategy:
+    blueGreen:
+      activeService: bluegreen-analysis-demo-active
+      previewService: bluegreen-analysis-demo-preview
+      autoPromotionEnabled: true
+      # Fixed array positions: the Tekton pipeline and the Developer Hub template patch
+      # args[1].value (json-patch path /spec/strategy/blueGreen/prePromotionAnalysis/args/1/value)
+      # to flip "fail" without touching args[0] (service-url).
+      prePromotionAnalysis:
+        templates:
+          - templateName: smoke-test
+        args:
+          - name: service-url
+            value: http://bluegreen-analysis-demo-preview.rollouts-demo.svc.cluster.local:8080
+          - name: fail
+            value: "false"
+  template:
+    metadata:
+      labels:
+        app: bluegreen-analysis-demo
+        backstage.io/kubernetes-id: rollouts-bluegreen-analysis
+    spec:
+      containers:
+        - name: rollouts-demo
+          image: docker.io/argoproj/rollouts-demo:blue
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /color, port: 8080}
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bluegreen-analysis-demo-active
+  labels: {app: bluegreen-analysis-demo}
+spec:
+  selector: {app: bluegreen-analysis-demo}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bluegreen-analysis-demo-preview
+  labels: {app: bluegreen-analysis-demo}
+spec:
+  selector: {app: bluegreen-analysis-demo}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: bluegreen-analysis-demo-active
+  labels: {app: bluegreen-analysis-demo}
+spec:
+  to: {kind: Service, name: bluegreen-analysis-demo-active}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: bluegreen-analysis-demo-preview
+  labels: {app: bluegreen-analysis-demo}
+spec:
+  to: {kind: Service, name: bluegreen-analysis-demo-preview}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}

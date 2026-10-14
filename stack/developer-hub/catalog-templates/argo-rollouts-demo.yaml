@@ -1,0 +1,147 @@
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: argo-rollouts-demo
+  title: "Argo Rollouts: deployment strategies"
+  description: Canary, blue-green, and both with an automated analysis gate -- independent of the ai-demo mesh stack
+  links:
+    - {url: "https://canary-demo-rollouts-demo.__APPS_DOMAIN__", title: Canary demo (blended), icon: dashboard}
+    - {url: "https://bluegreen-demo-preview-rollouts-demo.__APPS_DOMAIN__", title: Blue-green demo (preview), icon: dashboard}
+    - {url: "https://__GITLAB_HOST__/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo", title: Source (GitLab)}
+    - {url: "https://openshift-gitops-server-openshift-gitops.__APPS_DOMAIN__", title: Argo CD}
+spec:
+  owner: platform-team
+  domain: ai-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: rollouts-canary
+  title: "Argo Rollouts: canary"
+  description: Weighted traffic shift in 20% steps with timed pauses, fully automatic, no service mesh
+  annotations:
+    backstage.io/kubernetes-id: rollouts-canary
+    backstage.io/kubernetes-namespace: rollouts-demo
+    backstage.io/source-location: url:https://__GITLAB_HOST__/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
+    tekton.dev/cicd: "true"
+    argocd/app-name: rollouts-demo
+  links:
+    - {url: "https://canary-demo-rollouts-demo.__APPS_DOMAIN__", title: Blended (all traffic), icon: dashboard}
+    - {url: "https://canary-demo-canary-rollouts-demo.__APPS_DOMAIN__", title: Canary pods only}
+    - {url: "https://canary-demo-stable-rollouts-demo.__APPS_DOMAIN__", title: Stable pods only}
+    - {url: "https://argo-rollouts.readthedocs.io/en/stable/getting-started/", title: "Argo Rollouts docs: getting started"}
+  tags: [argo-rollouts, canary]
+spec:
+  type: service
+  lifecycle: experimental
+  owner: platform-team
+  system: argo-rollouts-demo
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: rollouts-bluegreen
+  title: "Argo Rollouts: blue-green"
+  description: Two live Services (active + preview); the cutover is a deliberate, manual action
+  annotations:
+    backstage.io/kubernetes-id: rollouts-bluegreen
+    backstage.io/kubernetes-namespace: rollouts-demo
+    backstage.io/source-location: url:https://__GITLAB_HOST__/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
+    tekton.dev/cicd: "true"
+    argocd/app-name: rollouts-demo
+  links:
+    - {url: "https://bluegreen-demo-active-rollouts-demo.__APPS_DOMAIN__", title: Active, icon: dashboard}
+    - {url: "https://bluegreen-demo-preview-rollouts-demo.__APPS_DOMAIN__", title: Preview}
+    - {url: "https://argo-rollouts.readthedocs.io/en/stable/features/bluegreen/", title: "Argo Rollouts docs: blue-green"}
+  tags: [argo-rollouts, blue-green]
+spec:
+  type: service
+  lifecycle: experimental
+  owner: platform-team
+  system: argo-rollouts-demo
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: rollouts-bluegreen-analysis
+  title: "Argo Rollouts: blue-green + pre-promotion analysis"
+  description: A smoke test against the preview Service gates the cutover automatically (pass = promote, fail = stay put)
+  annotations:
+    backstage.io/kubernetes-id: rollouts-bluegreen-analysis
+    backstage.io/kubernetes-namespace: rollouts-demo
+    backstage.io/source-location: url:https://__GITLAB_HOST__/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
+    tekton.dev/cicd: "true"
+    argocd/app-name: rollouts-demo
+  links:
+    - {url: "https://bluegreen-analysis-demo-active-rollouts-demo.__APPS_DOMAIN__", title: Active, icon: dashboard}
+    - {url: "https://bluegreen-analysis-demo-preview-rollouts-demo.__APPS_DOMAIN__", title: Preview}
+    - {url: "https://argo-rollouts.readthedocs.io/en/stable/features/analysis/", title: "Argo Rollouts docs: analysis"}
+  tags: [argo-rollouts, blue-green, analysis]
+spec:
+  type: service
+  lifecycle: experimental
+  owner: platform-team
+  system: argo-rollouts-demo
+  dependsOn: [resource:rollouts-smoke-test]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: rollouts-canary-analysis
+  title: "Argo Rollouts: canary + post-promotion analysis"
+  description: A smoke test after each weight step gates the next one; a failure auto-aborts the rollout
+  annotations:
+    backstage.io/kubernetes-id: rollouts-canary-analysis
+    backstage.io/kubernetes-namespace: rollouts-demo
+    backstage.io/source-location: url:https://__GITLAB_HOST__/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
+    tekton.dev/cicd: "true"
+    argocd/app-name: rollouts-demo
+  links:
+    - {url: "https://canary-analysis-demo-rollouts-demo.__APPS_DOMAIN__", title: Blended (all traffic), icon: dashboard}
+    - {url: "https://canary-analysis-demo-canary-rollouts-demo.__APPS_DOMAIN__", title: Canary pods only}
+    - {url: "https://canary-analysis-demo-stable-rollouts-demo.__APPS_DOMAIN__", title: Stable pods only}
+    - {url: "https://argo-rollouts.readthedocs.io/en/stable/features/analysis/", title: "Argo Rollouts docs: analysis"}
+  tags: [argo-rollouts, canary, analysis]
+spec:
+  type: service
+  lifecycle: experimental
+  owner: platform-team
+  system: argo-rollouts-demo
+  dependsOn: [resource:rollouts-smoke-test]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: rollouts-smoke-test
+  title: "AnalysisTemplate: smoke-test"
+  description: Shared Job-based metric (curl + HTTP 200 check, no Prometheus) used by both "with analysis" demos
+  annotations:
+    backstage.io/kubernetes-namespace: rollouts-demo
+    backstage.io/kubernetes-label-selector: app.kubernetes.io/part-of=rollouts-demo
+  tags: [argo-rollouts, analysistemplate]
+spec:
+  type: analysis-template
+  owner: platform-team
+  system: argo-rollouts-demo
+---
+# The Tekton deployment pipeline: releases a color to one of the four Rollouts and, for the two
+# "with analysis" targets, arms or disarms the smoke test (app/deploy/rollouts-demo/pipeline.yaml).
+# Its PipelineRuns are labelled with the matching component's kubernetes-id (rollouts-canary,
+# rollouts-bluegreen, ...), so they show up directly in each component's own CI tab -- this entry
+# is just the shared definition.
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: rollouts-release-pipeline
+  title: "Tekton pipeline: rollouts-release"
+  description: "Patches the Rollout image, arms/disarms the smoke test, waits for Healthy or Degraded; run with ./demo.sh argorollouts pipeline <target> [color] [fail]"
+  annotations:
+    backstage.io/kubernetes-namespace: rollouts-demo
+    backstage.io/kubernetes-label-selector: tekton.dev/pipeline=rollouts-release
+  links:
+    - {url: "https://console-openshift-console.__APPS_DOMAIN__/k8s/ns/rollouts-demo/tekton.dev~v1~Pipeline/rollouts-release", title: "Tekton pipeline (OpenShift console)"}
+  tags: [tekton, ci-cd]
+spec:
+  type: ci-pipeline
+  owner: platform-team
+  system: argo-rollouts-demo

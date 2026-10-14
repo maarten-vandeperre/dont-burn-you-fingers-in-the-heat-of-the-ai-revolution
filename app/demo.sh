@@ -16,6 +16,7 @@
 #   probe                   "who can access who" from the frontend's mesh identity
 #   mtls                    call the services from a pod outside the mesh (STRICT mTLS rejects it)
 #   rollout                 start an Argo Rollouts canary of the model-router (needs --rollouts)
+#   argorollouts <action>   Argo Rollouts strategy tutorial (canary, blue-green, +analysis), see below
 #   cdc                     create a customer + order and show the MongoDB projection
 #   ask "<question>" [model] ask the RAG service (model: auto | qwen | gemma | openai)
 #   pipeline <git-url> [rev] build all services with the Tekton pipeline instead
@@ -358,6 +359,155 @@ rollout() {
   ok "done. Abort a running canary with: oc patch rollout model-router -n $NS --type merge -p '{\"status\":{\"abort\":true}}'"
 }
 
+# ----------------------------------------------------------------------------- Argo Rollouts demo
+# Four Rollouts in their own project (rollouts-demo), independent of the rest of the stack:
+# canary, blue-green, blue-green with pre-promotion analysis, canary with post-promotion analysis.
+# Manifests: app/deploy/rollouts-demo. Guide: docs/demos/09-argo-rollouts.md
+ROLLOUTS_NS="rollouts-demo"
+ROLLOUTS_DIR="${APP_DIR}/deploy/rollouts-demo"
+ROLLOUTS_TARGETS=(canary-demo bluegreen-demo bluegreen-analysis-demo canary-analysis-demo)
+
+rollouts_deploy() {
+  need oc
+  oc get crd rollouts.argoproj.io >/dev/null 2>&1 || die "Argo Rollouts is not installed: ./deploy.sh stack"
+  step "Argo Rollouts demo: canary, blue-green, blue-green+pre-analysis, canary+post-analysis"
+  oc apply -k "$ROLLOUTS_DIR"
+  local t
+  for t in "${ROLLOUTS_TARGETS[@]}"; do
+    oc wait "rollout/$t" -n "$ROLLOUTS_NS" --for=condition=Available --timeout=300s >/dev/null 2>&1 \
+      && ok "$t" || warn "$t not ready yet: oc get rollout $t -n $ROLLOUTS_NS"
+  done
+  rollouts_urls
+}
+
+# rollouts_release <target> <color> [fail]: patch the Rollout's image (triggers a new revision) and,
+# for the two "with analysis" targets, arm or disarm the shared smoke-test AnalysisTemplate.
+rollouts_release() {
+  need oc
+  local target="$1" color="${2:-yellow}" fail="${3:-false}"
+  oc get rollout "$target" -n "$ROLLOUTS_NS" >/dev/null 2>&1 || die "unknown rollout '${target}' (./demo.sh argorollouts deploy first)"
+  oc patch rollout "$target" -n "$ROLLOUTS_NS" --type=json \
+    -p "[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/image\",\"value\":\"docker.io/argoproj/rollouts-demo:${color}\"}]" >/dev/null
+  case "$target" in
+    canary-analysis-demo)
+      oc patch rollout canary-analysis-demo -n "$ROLLOUTS_NS" --type=json -p "[
+        {\"op\":\"replace\",\"path\":\"/spec/strategy/canary/steps/1/analysis/args/1/value\",\"value\":\"${fail}\"},
+        {\"op\":\"replace\",\"path\":\"/spec/strategy/canary/steps/4/analysis/args/1/value\",\"value\":\"${fail}\"}]" >/dev/null ;;
+    bluegreen-analysis-demo)
+      oc patch rollout bluegreen-analysis-demo -n "$ROLLOUTS_NS" --type=json -p "[
+        {\"op\":\"replace\",\"path\":\"/spec/strategy/blueGreen/prePromotionAnalysis/args/1/value\",\"value\":\"${fail}\"}]" >/dev/null ;;
+  esac
+  ok "${target}: releasing ${color}$([[ "$fail" == "true" ]] && echo " (smoke test armed to fail)")"
+  info "watch: ./demo.sh argorollouts status   |   oc get rollout ${target} -n ${ROLLOUTS_NS} -w"
+}
+
+# Status subresource: oc only routes a status-only patch correctly with --subresource=status
+# (plain "oc patch ... -p '{\"status\":...}'" silently patches nothing on this CRD).
+rollouts_promote() { need oc; oc get rollout "$1" -n "$ROLLOUTS_NS" >/dev/null 2>&1 || die "unknown rollout '$1'"; oc patch rollout "$1" -n "$ROLLOUTS_NS" --subresource=status --type=merge -p '{"status":{"pauseConditions":null}}' >/dev/null && ok "${1}: promoted"; }
+rollouts_abort()   { need oc; oc get rollout "$1" -n "$ROLLOUTS_NS" >/dev/null 2>&1 || die "unknown rollout '$1'"; oc patch rollout "$1" -n "$ROLLOUTS_NS" --subresource=status --type=merge -p '{"status":{"abort":true}}'   >/dev/null && ok "${1}: aborted (back to stable/active)"; }
+rollouts_retry()   { need oc; oc get rollout "$1" -n "$ROLLOUTS_NS" >/dev/null 2>&1 || die "unknown rollout '$1'"; oc patch rollout "$1" -n "$ROLLOUTS_NS" --subresource=status --type=merge -p '{"status":{"abort":false}}'  >/dev/null && ok "${1}: retried"; }
+
+rollouts_reset() {
+  need oc
+  local t
+  for t in "${ROLLOUTS_TARGETS[@]}"; do
+    oc patch rollout "$t" -n "$ROLLOUTS_NS" --subresource=status --type=merge -p '{"status":{"abort":false,"pauseConditions":null}}' >/dev/null 2>&1 || true
+    case "$t" in
+      canary-analysis-demo)
+        oc patch rollout "$t" -n "$ROLLOUTS_NS" --type=json -p '[
+          {"op":"replace","path":"/spec/strategy/canary/steps/1/analysis/args/1/value","value":"false"},
+          {"op":"replace","path":"/spec/strategy/canary/steps/4/analysis/args/1/value","value":"false"}]' >/dev/null 2>&1 || true ;;
+      bluegreen-analysis-demo)
+        oc patch rollout "$t" -n "$ROLLOUTS_NS" --type=json -p '[
+          {"op":"replace","path":"/spec/strategy/blueGreen/prePromotionAnalysis/args/1/value","value":"false"}]' >/dev/null 2>&1 || true ;;
+    esac
+    oc patch rollout "$t" -n "$ROLLOUTS_NS" --type=json \
+      -p '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"docker.io/argoproj/rollouts-demo:blue"}]' >/dev/null 2>&1 || true
+  done
+  ok "all four rollouts back to blue, analyses disarmed"
+}
+
+rollouts_status() {
+  need oc
+  local t
+  for t in "${ROLLOUTS_TARGETS[@]}"; do
+    printf '  %-26s ' "$t"
+    oc get rollout "$t" -n "$ROLLOUTS_NS" -o jsonpath='phase={.status.phase}  step={.status.currentStepIndex}{"\n"}' 2>/dev/null \
+      || echo "not deployed"
+  done
+  echo
+  oc get analysisrun -n "$ROLLOUTS_NS" 2>/dev/null || true
+}
+
+rollouts_urls() {
+  step "Argo Rollouts demo URLs"
+  local r h
+  h=$(oc get route rollouts-dashboard -n "$ROLLOUTS_NS" -o jsonpath='{.spec.host}' 2>/dev/null || true)
+  [[ -n "$h" ]] && info "$(printf '%-28s' "Argo Rollouts dashboard"): https://${h}/rollouts   <- promote/abort/retry in the UI"
+  for r in canary-demo canary-demo-canary canary-demo-stable \
+           bluegreen-demo-active bluegreen-demo-preview \
+           bluegreen-analysis-demo-active bluegreen-analysis-demo-preview \
+           canary-analysis-demo canary-analysis-demo-canary canary-analysis-demo-stable; do
+    h=$(oc get route "$r" -n "$ROLLOUTS_NS" -o jsonpath='{.spec.host}' 2>/dev/null || true)
+    [[ -n "$h" ]] && info "$(printf '%-28s' "$r"): https://${h}"
+  done
+}
+
+rollouts_pipeline() {  # rollouts_pipeline <target> [color] [fail]
+  need oc
+  local target="${1:-}" color="${2:-yellow}" fail="${3:-false}" ci_id
+  [[ -n "$target" ]] || die "usage: ./demo.sh argorollouts pipeline <target> [color] [fail]"
+  oc get rollout "$target" -n "$ROLLOUTS_NS" >/dev/null 2>&1 || die "unknown rollout '${target}' (./demo.sh argorollouts deploy first)"
+  ci_id="rollouts-${target%-demo}"
+  oc create -n "$ROLLOUTS_NS" -f - >/dev/null <<EOF
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: rollouts-release-${target}-
+  labels:
+    backstage.io/kubernetes-id: ${ci_id}   # Tekton tab of the matching Developer Hub component
+spec:
+  pipelineRef: {name: rollouts-release}
+  params:
+    - {name: target, value: "${target}"}
+    - {name: color, value: "${color}"}
+    - {name: simulate-failure, value: "${fail}"}
+EOF
+  ok "PipelineRun started for ${target} (-> ${color}, simulate-failure=${fail})"
+  info "OpenShift console > Pipelines > ${ROLLOUTS_NS}, or Developer Hub component's CI tab"
+}
+
+rollouts_gitops() {
+  need oc
+  local repo="${1:-}" rev="${2:-main}" prefix path
+  [[ -n "$repo" ]] || die "usage: ./demo.sh argorollouts gitops <git-url> [revision]"
+  prefix=$(git -C "$APP_DIR" rev-parse --show-prefix 2>/dev/null || echo "app/")
+  path="${prefix}deploy/rollouts-demo"
+  sed -e "s#__REPO_URL__#${repo}#" -e "s#__REVISION__#${rev}#" -e "s#__PATH__#${path}#" \
+    "${ROLLOUTS_DIR}/argocd-application.yaml" | oc apply -f -
+  ok "Argo CD Application rollouts-demo -> ${repo} @ ${rev} : ${path}"
+}
+
+argorollouts() {
+  local action="${1:-}"; [[ $# -gt 0 ]] && shift
+  case "$action" in
+    deploy)              rollouts_deploy ;;
+    canary)               rollouts_release canary-demo "${1:-yellow}" ;;
+    bluegreen)            rollouts_release bluegreen-demo "${1:-yellow}" ;;
+    bluegreen-analysis)   rollouts_release bluegreen-analysis-demo "${1:-yellow}" "${2:-false}" ;;
+    canary-analysis)      rollouts_release canary-analysis-demo "${1:-yellow}" "${2:-false}" ;;
+    promote)              [[ -n "${1:-}" ]] || die "usage: ./demo.sh argorollouts promote <rollout>"; rollouts_promote "$1" ;;
+    abort)                [[ -n "${1:-}" ]] || die "usage: ./demo.sh argorollouts abort <rollout>"; rollouts_abort "$1" ;;
+    retry)                [[ -n "${1:-}" ]] || die "usage: ./demo.sh argorollouts retry <rollout>"; rollouts_retry "$1" ;;
+    reset)                rollouts_reset ;;
+    status)               rollouts_status ;;
+    urls)                 rollouts_urls ;;
+    pipeline)             rollouts_pipeline "$@" ;;
+    gitops)               rollouts_gitops "$@" ;;
+    *) die "argorollouts: deploy | canary [color] | bluegreen [color] | bluegreen-analysis [color] [fail] | canary-analysis [color] [fail] | promote|abort|retry <rollout> | reset | status | urls | pipeline <rollout> [color] [fail] | gitops <git-url>" ;;
+  esac
+}
+
 cdc() {
   need curl
   local url stamp; url=$(base_url); stamp=$(date +%H%M%S)
@@ -488,6 +638,7 @@ case "$cmd" in
   probe)    probe ;;
   mtls)     mtls ;;
   rollout)  rollout ;;
+  argorollouts) argorollouts "$@" ;;
   cdc)      cdc ;;
   ask)      ask "$@" ;;
   pipeline) pipeline "$@" ;;

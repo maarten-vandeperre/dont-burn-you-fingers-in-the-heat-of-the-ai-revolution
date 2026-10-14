@@ -121,8 +121,8 @@ events into one file (without secrets) when you need help.
 
 ### 4. Demo it
 
-* **[docs/demos](docs/demos/README.md)**: a platform tour and seven demos, each step as Do / You
-  see / Say, in the OpenShift (AI) consoles and in IntelliJ
+* **[docs/demos](docs/demos/README.md)**: a platform tour and demos for every layer of the stack,
+  each step as Do / You see / Say, in the OpenShift (AI) consoles and in IntelliJ
 * Developer Hub: sign in with `admin` / `redhatdemo`; Create > templates
 * Two laptop demos that need no cluster: `app/camel-ai-demo` (Camel with Kaoto and Hawtio) and
   `app/coffee-guardrails` (NeMo Guardrails with TrustyAI, podman compose)
@@ -145,7 +145,10 @@ use the whole stack. Next to the RAG demo there is **Platform Coffee**, the coff
 audit trail built by Debezium. Together they show: RAG with LangChain4j on the MaaS models and OpenAI, an Apache Camel model router with
 circuit breaker and fallback, mesh mTLS and per-identity authorization, canary / A-B / blue-green /
 mirroring (and an Argo Rollouts canary), Debezium CDC from PostgreSQL into a MongoDB read model,
-and traces, metrics and JSON logs for every hop.
+and traces, metrics and JSON logs for every hop. A separate, standalone tutorial
+(`app/deploy/rollouts-demo/`) walks through all four Argo Rollouts strategies on their own —
+canary, blue-green, and both with analysis gating the release — with a Tekton pipeline and
+Developer Hub day-2 actions; see [demo 9](docs/demos/09-argo-rollouts.md).
 
 ```bash
 ./deploy.sh app all          # = app/demo.sh all: setup, in-cluster builds, deploy (see Getting started)
@@ -156,8 +159,9 @@ and traces, metrics and JSON logs for every hop.
 
 See `app/README.md` for the architecture, and **[docs/demos](docs/demos/README.md)** for the demo guides:
 a [platform tour](docs/demos/00-platform-tour.md) of every UI, a [test checklist](docs/demos/testing.md)
-with expected results, and seven demos (models and RAG, mesh security, deployment patterns, CDC,
-observability, Developer Hub, Platform Coffee), each with a UI walkthrough and test commands.
+with expected results, and demos for models and RAG, mesh security, deployment patterns, CDC,
+observability, Developer Hub, trusted software supply chain, Argo Rollouts and Platform Coffee,
+each with a UI walkthrough and test commands.
 [Service mesh manifests](docs/demos/service-mesh.md) is the mesh demos with the YAML field and the
 `oc apply` for each change.
 
@@ -168,12 +172,12 @@ Hub into the entry point for the whole platform:
 
 | What | How it is wired |
 |---|---|
-| Catalog | Domain `ai-platform`, systems `openshift-platform`, `models-as-a-service`, `ai-demo`; every service, model, database, Kafka cluster, connector and platform service as an entity, with ownership, dependencies and links (console, Kiali, traces, Argo CD, demo UI). Rendered from `stack/developer-hub/catalog-templates/` with the cluster's apps domain and mounted as files |
+| Catalog | Domain `ai-platform`, systems `openshift-platform`, `models-as-a-service`, `ai-demo`, `argo-rollouts-demo`; every service, model, database, Kafka cluster, connector and platform service as an entity, with ownership, dependencies and links (console, Kiali, traces, Argo CD, demo UI). Rendered from `stack/developer-hub/catalog-templates/` with the cluster's apps domain and mounted as files — every new catalog/template file needs adding to both that folder's `catalog-info.yaml` *and* `stack/developer-hub/kustomization.yaml`'s `rhdh-catalog` ConfigMap generator, or it never reaches the running pod |
 | APIs | OpenAPI definitions for the BFF, rag-service, model-router (OpenAI compatible), orders and customer-views APIs, linked as provides / consumes |
 | Kubernetes + Topology | Read-only `rhdh-kubernetes` service account (cluster `view` + logs and the CRDs used here). Workloads carry `backstage.io/kubernetes-id`; Topology shows the ai-demo services with their connections, routes, the Argo Rollout, VirtualServices, the LLMInferenceServices, Kafka and Debezium resources |
 | Tekton | PipelineRuns from `app/demo.sh pipeline` are labelled per component and show up in its CI tab |
 | Argo CD | Sync status of the stack Applications and of `ai-demo` (`app/demo.sh gitops <git-url>`) |
-| Software templates (Create) | Switch the rag-service traffic pattern (canary with weight, A/B, blue, green, mirror); start / abort / retry the model-router Argo Rollout; scale a demo Deployment; scale a MaaS model (0 replicas of Qwen shows the OpenAI fallback) |
+| Software templates (Create) | Switch the rag-service traffic pattern (canary with weight, A/B, blue, green, mirror); start / abort / retry the model-router Argo Rollout; scale a demo Deployment; scale a MaaS model (0 replicas of Qwen shows the OpenAI fallback); release / promote / abort / retry each of the four standalone Argo Rollouts demos (canary, blue-green, blue-green + analysis, canary + analysis), the last two with a "simulate a failure" switch |
 
 Templates write through a Developer Hub proxy (`/platform-actions`) with the separate
 `rhdh-platform-actions` token, which may only patch VirtualServices, Rollouts and replicas in
@@ -301,6 +305,7 @@ governance/                MaaSAuthPolicy + free / premium MaaSSubscriptions
 observability/             RHOAI monitoring stack, telemetry (+ Loki usage logs on 3.5)
 argocd/                    Application templates (MaaS, observability, stack) + RBAC
 app/                       demo applications (Quarkus, React, Camel, LangChain4j) + deploy/ + demo.sh
+  deploy/rollouts-demo/    standalone Argo Rollouts tutorial: 4 strategies, AnalysisTemplate, Tekton pipeline
 docs/demos/                short demo guides
 deploy.sh
 ```

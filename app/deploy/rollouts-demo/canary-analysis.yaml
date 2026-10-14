@@ -1,0 +1,130 @@
+# 4. CANARY WITH (POST-PROMOTION) ANALYSIS. Same shape as canary.yaml, but after each weight is
+# promoted the shared smoke-test AnalysisTemplate runs against the CANARY service before the next
+# step is allowed to proceed -- "post" because it checks the version that traffic was just shifted
+# to. A failed analysis aborts the whole rollout automatically (canary scaled back to 0), exactly
+# like a real error-rate based gate would, just without needing Prometheus for the demo.
+#
+# Run it (healthy): ./demo.sh argorollouts canary-analysis [color]
+# Run it (bad):      ./demo.sh argorollouts canary-analysis red true
+# Watch it:          oc get analysisrun -n rollouts-demo -w   |   oc get rollout canary-analysis-demo -n rollouts-demo -w
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: canary-analysis-demo
+  namespace: rollouts-demo
+  labels:
+    app: canary-analysis-demo
+    backstage.io/kubernetes-id: rollouts-canary-analysis
+    app.kubernetes.io/part-of: rollouts-demo
+spec:
+  replicas: 5
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: canary-analysis-demo
+  strategy:
+    canary:
+      canaryService: canary-analysis-demo-canary
+      stableService: canary-analysis-demo-stable
+      # Fixed step indices: the Tekton pipeline and the Developer Hub template patch
+      # steps[1].analysis.args[1].value and steps[4].analysis.args[1].value (json-patch paths
+      # /spec/strategy/canary/steps/1/analysis/args/1/value and .../steps/4/analysis/args/1/value)
+      # to flip "fail" for both checks at once without touching service-url (args[0]).
+      steps:
+        - setWeight: 20
+        - analysis:
+            templates:
+              - templateName: smoke-test
+            args:
+              - name: service-url
+                value: http://canary-analysis-demo-canary.rollouts-demo.svc.cluster.local:8080
+              - name: fail
+                value: "false"
+        - pause: {duration: 20s}
+        - setWeight: 60
+        - analysis:
+            templates:
+              - templateName: smoke-test
+            args:
+              - name: service-url
+                value: http://canary-analysis-demo-canary.rollouts-demo.svc.cluster.local:8080
+              - name: fail
+                value: "false"
+        - pause: {duration: 20s}
+        - setWeight: 100
+  template:
+    metadata:
+      labels:
+        app: canary-analysis-demo
+        backstage.io/kubernetes-id: rollouts-canary-analysis
+    spec:
+      containers:
+        - name: rollouts-demo
+          image: docker.io/argoproj/rollouts-demo:blue
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /color, port: 8080}
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-analysis-demo
+  labels: {app: canary-analysis-demo}
+spec:
+  selector: {app: canary-analysis-demo}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-analysis-demo-canary
+  labels: {app: canary-analysis-demo}
+spec:
+  selector: {app: canary-analysis-demo}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-analysis-demo-stable
+  labels: {app: canary-analysis-demo}
+spec:
+  selector: {app: canary-analysis-demo}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: canary-analysis-demo
+  labels: {app: canary-analysis-demo}
+spec:
+  to: {kind: Service, name: canary-analysis-demo}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: canary-analysis-demo-canary
+  labels: {app: canary-analysis-demo}
+spec:
+  to: {kind: Service, name: canary-analysis-demo-canary}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: canary-analysis-demo-stable
+  labels: {app: canary-analysis-demo}
+spec:
+  to: {kind: Service, name: canary-analysis-demo-stable}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}

@@ -1,0 +1,63 @@
+# Changes the canary-demo Rollout through the /platform-actions proxy (rhdh-platform-actions
+# token, scoped to get/patch rollouts in rollouts-demo by app/deploy/rollouts-demo/rbac.yaml).
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: rollouts-canary
+  title: "Argo Rollouts: canary release"
+  description: Release a new color to the canary demo (20% -> 40% -> 60% -> 80% -> 100%), or abort / retry it
+  tags: [argo-rollouts, canary]
+spec:
+  owner: platform-team
+  type: platform-action
+  parameters:
+    - title: Action
+      required: [action]
+      properties:
+        action:
+          title: Action
+          type: string
+          default: release
+          enum: [release, abort, retry]
+          enumNames: ["Release a new color", "Abort (back to stable)", "Retry an aborted release"]
+        color:
+          title: Color
+          type: string
+          default: yellow
+          enum: [blue, yellow, green, red]
+          ui:help: Only used for "Release". docker.io/argoproj/rollouts-demo:<color>
+  steps:
+    - id: release
+      if: ${{ parameters.action === 'release' }}
+      name: New color
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/argoproj.io/v1alpha1/namespaces/rollouts-demo/rollouts/canary-demo
+        headers:
+          content-type: application/json-patch+json
+        body: '[{"op":"replace","path":"/spec/template/spec/containers/0/image","value":"docker.io/argoproj/rollouts-demo:${{ parameters.color }}"}]'
+    - id: abort
+      if: ${{ parameters.action === 'abort' }}
+      name: Abort
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/argoproj.io/v1alpha1/namespaces/rollouts-demo/rollouts/canary-demo/status
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"status":{"abort":true}}'
+    - id: retry
+      if: ${{ parameters.action === 'retry' }}
+      name: Retry
+      action: http:backstage:request
+      input:
+        method: PATCH
+        path: /proxy/platform-actions/apis/argoproj.io/v1alpha1/namespaces/rollouts-demo/rollouts/canary-demo/status
+        headers:
+          content-type: application/merge-patch+json
+        body: '{"status":{"abort":false}}'
+  output:
+    links:
+      - title: rollouts-canary in the catalog (Kubernetes tab shows the Rollout and Services)
+        entityRef: component:default/rollouts-canary

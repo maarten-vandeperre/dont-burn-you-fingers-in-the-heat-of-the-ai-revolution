@@ -1,0 +1,17 @@
+# Argo Rollouts strategy tutorial: canary, blue-green, blue-green+pre-promotion analysis,
+# canary+post-promotion analysis. Needs only Argo Rollouts and OpenShift Pipelines (no mesh, no
+# MaaS, no Kafka): oc apply -k app/deploy/rollouts-demo   (or ./demo.sh argorollouts deploy)
+# Docs: docs/demos/09-argo-rollouts.md
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rollouts-demo
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - analysis-template.yaml
+  - canary.yaml
+  - bluegreen.yaml
+  - bluegreen-analysis.yaml
+  - canary-analysis.yaml
+  - pipeline.yaml
+  - dashboard.yaml

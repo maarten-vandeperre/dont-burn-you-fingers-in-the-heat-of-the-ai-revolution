@@ -1,0 +1,117 @@
+# 1. CANARY. The textbook Argo Rollouts canary from the upstream "Getting started" guide: no
+# service mesh, no trafficRouting plugin -- Argo Rollouts scales the stable and canary
+# ReplicaSets so their pod COUNT approximates the step weight, and the one Service in front of
+# both (canary-demo) load-balances across whatever pods exist. canary-demo-canary and
+# canary-demo-stable are extra Services that always point at just one ReplicaSet each, added
+# only so you can watch each version on its own Route while canary-demo shows the blend.
+#
+# Run it:   ./demo.sh argorollouts canary [color]      (color: blue | yellow | green | red)
+# Watch it: ./demo.sh argorollouts status canary-demo   |  oc get rollout canary-demo -n rollouts-demo -w
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: canary-demo
+  namespace: rollouts-demo
+  labels:
+    app: canary-demo
+    backstage.io/kubernetes-id: rollouts-canary
+    app.kubernetes.io/part-of: rollouts-demo
+spec:
+  replicas: 5
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: canary-demo
+  strategy:
+    canary:
+      canaryService: canary-demo-canary
+      stableService: canary-demo-stable
+      steps:
+        - setWeight: 20
+        - pause: {duration: 20s}
+        - setWeight: 40
+        - pause: {duration: 20s}
+        - setWeight: 60
+        - pause: {duration: 20s}
+        - setWeight: 80
+        - pause: {duration: 20s}
+        - setWeight: 100
+  template:
+    metadata:
+      labels:
+        app: canary-demo
+        backstage.io/kubernetes-id: rollouts-canary
+    spec:
+      containers:
+        - name: rollouts-demo
+          image: docker.io/argoproj/rollouts-demo:blue
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /color, port: 8080}
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+---
+# Blended: all ready pods, old + new, in the ratio the current step implies.
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-demo
+  labels: {app: canary-demo}
+spec:
+  selector: {app: canary-demo}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+# Only the canary ReplicaSet (Argo Rollouts keeps the selector pointed at it).
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-demo-canary
+  labels: {app: canary-demo}
+spec:
+  selector: {app: canary-demo}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+# Only the stable ReplicaSet.
+apiVersion: v1
+kind: Service
+metadata:
+  name: canary-demo-stable
+  labels: {app: canary-demo}
+spec:
+  selector: {app: canary-demo}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: canary-demo
+  labels: {app: canary-demo}
+spec:
+  to: {kind: Service, name: canary-demo}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: canary-demo-canary
+  labels: {app: canary-demo}
+spec:
+  to: {kind: Service, name: canary-demo-canary}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: canary-demo-stable
+  labels: {app: canary-demo}
+spec:
+  to: {kind: Service, name: canary-demo-stable}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}

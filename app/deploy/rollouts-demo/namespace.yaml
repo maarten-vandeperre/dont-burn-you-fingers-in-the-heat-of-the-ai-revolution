@@ -1,0 +1,11 @@
+# A standalone project for the Argo Rollouts strategy tutorial: deliberately NOT in the service
+# mesh (no sidecar) so it has zero dependency on the rest of the stack beyond Argo Rollouts and
+# OpenShift Pipelines, and the canary/blue-green percentages are native Kubernetes Service
+# selectors (not Istio weights) -- this is "Argo Rollouts on its own", the counterpart to the
+# mesh-driven canary in app/deploy/overlays/rollouts (model-router).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rollouts-demo
+  labels:
+    app.kubernetes.io/part-of: rollouts-demo

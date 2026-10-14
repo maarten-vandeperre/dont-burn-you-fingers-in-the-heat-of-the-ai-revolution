@@ -1,0 +1,86 @@
+# 2. BLUE-GREEN. Two full-size Services, both always up: bluegreen-demo-preview always points at
+# the newest ReplicaSet, bluegreen-demo-active only moves there when a human (or the Developer Hub
+# template) promotes. autoPromotionEnabled: false is the whole point of this demo: the cutover is
+# a deliberate action, not a timer.
+#
+# Run it:     ./demo.sh argorollouts bluegreen [color]
+# Preview it: open the *-preview Route, confirm it looks right
+# Promote:    ./demo.sh argorollouts promote bluegreen-demo
+# Abort:      ./demo.sh argorollouts abort bluegreen-demo   (active Service never moves)
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: bluegreen-demo
+  namespace: rollouts-demo
+  labels:
+    app: bluegreen-demo
+    backstage.io/kubernetes-id: rollouts-bluegreen
+    app.kubernetes.io/part-of: rollouts-demo
+spec:
+  replicas: 3
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: bluegreen-demo
+  strategy:
+    blueGreen:
+      activeService: bluegreen-demo-active
+      previewService: bluegreen-demo-preview
+      autoPromotionEnabled: false
+  template:
+    metadata:
+      labels:
+        app: bluegreen-demo
+        backstage.io/kubernetes-id: rollouts-bluegreen
+    spec:
+      containers:
+        - name: rollouts-demo
+          image: docker.io/argoproj/rollouts-demo:blue
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /color, port: 8080}
+            initialDelaySeconds: 2
+            periodSeconds: 3
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bluegreen-demo-active
+  labels: {app: bluegreen-demo}
+spec:
+  selector: {app: bluegreen-demo}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bluegreen-demo-preview
+  labels: {app: bluegreen-demo}
+spec:
+  selector: {app: bluegreen-demo}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: bluegreen-demo-active
+  labels: {app: bluegreen-demo}
+spec:
+  to: {kind: Service, name: bluegreen-demo-active}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: bluegreen-demo-preview
+  labels: {app: bluegreen-demo}
+spec:
+  to: {kind: Service, name: bluegreen-demo-preview}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}

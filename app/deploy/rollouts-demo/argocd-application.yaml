@@ -1,0 +1,50 @@
+# Argo CD Application for the Argo Rollouts demo (created by: app/demo.sh argorollouts gitops <url>).
+# Developer Hub shows its sync status on the four rollouts-* components (annotation argocd/app-name).
+# Live demo actions (releases, promote/abort/retry, the smoke test's fail switch) touch fields that
+# GitOps would otherwise fight over, so they are ignored here -- same technique as
+# app/deploy/argocd-application.yaml for the mesh traffic patterns.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rollouts-demo
+  namespace: openshift-gitops
+  labels:
+    app.kubernetes.io/part-of: ai-platform
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: __REPO_URL__
+    targetRevision: __REVISION__
+    path: __PATH__
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - RespectIgnoreDifferences=true
+      - SkipDryRunOnMissingResource=true
+  ignoreDifferences:
+    - group: argoproj.io
+      kind: Rollout
+      name: canary-demo
+      jsonPointers: [/spec/template/spec/containers/0/image]
+    - group: argoproj.io
+      kind: Rollout
+      name: bluegreen-demo
+      jsonPointers: [/spec/template/spec/containers/0/image]
+    - group: argoproj.io
+      kind: Rollout
+      name: bluegreen-analysis-demo
+      jsonPointers:
+        - /spec/template/spec/containers/0/image
+        - /spec/strategy/blueGreen/prePromotionAnalysis/args
+    - group: argoproj.io
+      kind: Rollout
+      name: canary-analysis-demo
+      jsonPointers:
+        - /spec/template/spec/containers/0/image
+        - /spec/strategy/canary/steps
