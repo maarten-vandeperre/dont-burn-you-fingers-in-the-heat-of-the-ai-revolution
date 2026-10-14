@@ -1,0 +1,104 @@
+# The upstream Argo Rollouts web dashboard (`kubectl argo rollouts dashboard`), run as a
+# Deployment so you can show a release -- and click Promote on bluegreen-demo, or Abort/Retry --
+# in a browser instead of the terminal. Image is the official `kubectl-argo-rollouts` CLI image,
+# version-pinned to match the installed controller (v1.10.0, see "Run it" in README.md);
+# the binary's `dashboard` subcommand just points the same client-go code the CLI uses at one
+# namespace (`--namespace=rollouts-demo`) and serves the Argo Rollouts UI over HTTP.
+#
+# Its own ServiceAccount + Role is scoped to THIS namespace only, read-only except for the
+# patches the dashboard's own Promote / Abort / Retry / Restart buttons need -- same scope as
+# rbac.yaml's separate Developer Hub identity, just for the dashboard's pod instead.
+#
+# URL: ./demo.sh argorollouts urls   (or: oc get route rollouts-dashboard -n rollouts-demo)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rollouts-dashboard
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rollouts-dashboard
+rules:
+  - apiGroups: [argoproj.io]
+    resources: [rollouts, analysisruns, analysistemplates, experiments]
+    verbs: [get, list, watch]
+  - apiGroups: [argoproj.io]
+    resources: [rollouts, rollouts/status]
+    verbs: [patch]   # Promote / Abort / Retry / Restart buttons in the dashboard UI
+  - apiGroups: ["apps"]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods, services, events]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rollouts-dashboard
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: rollouts-dashboard
+subjects:
+  - kind: ServiceAccount
+    name: rollouts-dashboard
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rollouts-dashboard
+  labels:
+    app: rollouts-dashboard
+    backstage.io/kubernetes-id: rollouts-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: rollouts-dashboard}
+  template:
+    metadata:
+      labels:
+        app: rollouts-dashboard
+        backstage.io/kubernetes-id: rollouts-dashboard
+    spec:
+      serviceAccountName: rollouts-dashboard
+      containers:
+        - name: dashboard
+          image: quay.io/argoproj/kubectl-argo-rollouts:v1.10.0
+          args:
+            - dashboard
+            - --namespace=rollouts-demo
+            - --port=3100
+            - --cache-dir=/tmp/kube-cache   # the default "/.kube/cache" is not writable here
+          env:
+            - {name: HOME, value: /tmp}
+          ports:
+            - name: http
+              containerPort: 3100
+          readinessProbe:
+            httpGet: {path: /rollouts, port: 3100}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rollouts-dashboard
+  labels: {app: rollouts-dashboard}
+spec:
+  selector: {app: rollouts-dashboard}
+  ports: [{name: http, port: 3100, targetPort: 3100}]
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: rollouts-dashboard
+  labels: {app: rollouts-dashboard}
+spec:
+  to: {kind: Service, name: rollouts-dashboard}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
