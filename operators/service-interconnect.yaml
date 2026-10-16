@@ -1,0 +1,15 @@
+# Red Hat Service Interconnect (Skupper): connects services across network boundaries
+# (on-prem, other clusters, other clouds) over a secure, mutually-authenticated link, without a
+# VPN, a firewall hole or a public endpoint for the service itself. Used by the "connect to a
+# legacy database" part of docs/demos/10-connectivity.md (./deploy.sh connectivity).
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: skupper-operator
+  namespace: openshift-operators
+spec:
+  channel: stable-2
+  installPlanApproval: Automatic
+  name: skupper-operator
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace

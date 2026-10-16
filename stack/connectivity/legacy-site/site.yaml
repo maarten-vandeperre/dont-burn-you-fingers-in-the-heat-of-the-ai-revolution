@@ -1,0 +1,11 @@
+# This namespace's Skupper router. `linkAccess: default` makes it a *grantor*: it exposes (via
+# Routes, created automatically) the inter-router/edge ports the other site links to. On a real
+# second cluster this is the only thing on this side that needs a public(ish) endpoint at all --
+# never the database itself.
+apiVersion: skupper.io/v2alpha1
+kind: Site
+metadata:
+  name: legacy-datacenter
+  namespace: legacy-datacenter
+spec:
+  linkAccess: default

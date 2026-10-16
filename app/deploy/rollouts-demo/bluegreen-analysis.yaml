@@ -17,6 +17,10 @@ metadata:
     app: bluegreen-analysis-demo
     backstage.io/kubernetes-id: rollouts-bluegreen-analysis
     app.kubernetes.io/part-of: rollouts-demo
+    # Developer Hub's Argo CD plugin uses this (not part-of) to match a Rollout to the GitOps
+    # Application named in the rollouts-* Components' `argocd/app-name` annotation, and renders
+    # its canary/blue-green progress + AnalysisRuns in that Application's CD tab side panel.
+    app.kubernetes.io/instance: rollouts-demo
 spec:
   replicas: 3
   revisionHistoryLimit: 3

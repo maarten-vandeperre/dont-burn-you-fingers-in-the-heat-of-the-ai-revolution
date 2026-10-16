@@ -76,6 +76,7 @@ data:
         - {group: tekton.dev, apiVersion: v1, plural: pipelineruns}
         - {group: tekton.dev, apiVersion: v1, plural: taskruns}
         - {group: argoproj.io, apiVersion: v1alpha1, plural: rollouts}
+        - {group: argoproj.io, apiVersion: v1alpha1, plural: analysisruns}
         - {group: networking.istio.io, apiVersion: v1, plural: virtualservices}
         - {group: networking.istio.io, apiVersion: v1, plural: destinationrules}
         - {group: serving.kserve.io, apiVersion: v1alpha1, plural: llminferenceservices}

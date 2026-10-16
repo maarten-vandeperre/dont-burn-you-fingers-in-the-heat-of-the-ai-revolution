@@ -1,0 +1,36 @@
+# Seeds the one table this demo queries. Idempotent (CREATE TABLE IF NOT EXISTS, INSERT only if
+# the row is missing) so re-running `./deploy.sh connectivity legacy` never duplicates rows; a
+# Job (not an initContainer on the Deployment) so it is trivial to re-run on its own:
+#   oc create job --from=job/legacy-inventory-seed legacy-inventory-reseed-$(date +%s) -n legacy-datacenter
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: legacy-inventory-seed
+  namespace: legacy-datacenter
+spec:
+  backoffLimit: 6
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: psql
+          image: registry.redhat.io/rhel9/postgresql-16@sha256:3943bfa5de044d8f033df148c0409ed826171b779f3cf3ddf537a1914960ab57
+          envFrom:
+            - secretRef:
+                name: legacy-inventory-db-creds
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              export PGPASSWORD="$POSTGRESQL_PASSWORD"
+              until pg_isready -h legacy-inventory-db -U "$POSTGRESQL_USER" -d "$POSTGRESQL_DATABASE"; do sleep 2; done
+              psql -h legacy-inventory-db -U "$POSTGRESQL_USER" -d "$POSTGRESQL_DATABASE" <<'SQL'
+                CREATE TABLE IF NOT EXISTS parts (id serial primary key, name text, qty int);
+                INSERT INTO parts (name, qty)
+                  SELECT 'widget-7', 42
+                  WHERE NOT EXISTS (SELECT 1 FROM parts WHERE name = 'widget-7');
+                INSERT INTO parts (name, qty)
+                  SELECT 'bracket-12', 7
+                  WHERE NOT EXISTS (SELECT 1 FROM parts WHERE name = 'bracket-12');
+                SELECT * FROM parts;
+              SQL

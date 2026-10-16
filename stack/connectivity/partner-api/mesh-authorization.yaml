@@ -1,0 +1,44 @@
+# Two additions to app/deploy/mesh/authorization-policies.yaml's deny-all model (demo 2) -- the
+# mesh does not know or care that Connectivity Link exists further out; the new gateway and the
+# new caller it lets in both still need an explicit grant, exactly like every other identity in
+# that file.
+#
+# 1. The namespace-wide `deny-all` (no selector) also covers this new Gateway's own Envoy pod,
+#    the same way it covers ai-demo-gateway -- without this, the *first* hop (OpenShift router ->
+#    partner-gateway) already gets "RBAC: access denied", before Kuadrant or orders-service ever
+#    see the request. Mirrors `gateway-from-router`.
+# 2. orders-service's existing `orders-from-frontend` only allows the frontend's identity; this
+#    adds the partner gateway's own identity (`sa/partner-gateway-istio`, created automatically by
+#    the Gateway in gateway.yaml), scoped to GET on /api/orders only -- a partner may read orders
+#    through this path, nothing else, regardless of what Kuadrant's own policies allow.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: partner-gateway-from-router
+  namespace: ai-demo
+spec:
+  selector:
+    matchLabels:
+      gateway.networking.k8s.io/gateway-name: partner-gateway
+  action: ALLOW
+  rules:
+    - {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: orders-service-from-partner-gateway
+  namespace: ai-demo
+spec:
+  selector:
+    matchLabels:
+      app: orders-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["cluster.local/ns/ai-demo/sa/partner-gateway-istio"]
+      to:
+        - operation:
+            methods: ["GET"]
+            paths: ["/api/orders", "/api/orders/*"]

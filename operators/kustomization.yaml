@@ -6,3 +6,4 @@ resources:
   - connectivity-link.yaml
   - leader-worker-set.yaml
   - cert-manager.yaml
+  - service-interconnect.yaml

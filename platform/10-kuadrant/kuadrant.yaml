@@ -18,3 +18,9 @@ metadata:
 spec:
   observability:
     enable: true
+  # The Dev Portal (APIProduct, APIKeyRequest/APIKeyApproval/APIKey, self-service plans): the
+  # platform engineering piece of docs/demos/10-connectivity.md. Off by default upstream; on here
+  # so the APIProduct/devportal CRDs are actually reconciled (otherwise they sit with no status).
+  components:
+    developerPortal:
+      enabled: true

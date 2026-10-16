@@ -1,0 +1,38 @@
+# The API owner's auth scheme for this one HTTPRoute: an API key, sent as "Authorization: APIKEY
+# <value>". Authorino finds the key by looking for a Secret labelled
+# `kuadrant.io/apikeys-by: partner-orders-api-auth` -- exactly the label connectivity.sh's
+# `partner-api approve` puts on a Secret once an APIKeyRequest is approved (api-product.yaml's
+# APIKeyApproval flow); until then, the key simply does not match anything and the caller gets 401.
+#
+# allNamespaces: true is required here: the Authorino instance backing this cluster's Kuadrant is
+# cluster-wide, but it compiles every AuthConfig it generates into its *own* namespace
+# (kuadrant-system) -- without allNamespaces, it only ever looks for API key Secrets in
+# kuadrant-system too, never finding ours in ai-demo (where the devportal creates them, next to
+# the API they belong to). See docs/demos/10-connectivity.md, "If something goes wrong".
+#
+# This AuthPolicy targets the HTTPRoute, not the Gateway: it only ever applies to this one API.
+# A platform-wide default (deny everything on this Gateway unless a route says otherwise) would
+# go on the Gateway instead, the same relationship as openshift-ingress's `gateway-default-auth`
+# to the per-model AuthPolicies in platform/10-kuadrant's MaaS setup -- left out of this demo to
+# keep it to one API, but the same `targetRef: {kind: Gateway, name: partner-gateway}` pattern.
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: partner-orders-api-auth
+  namespace: ai-demo
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: partner-orders-api
+  rules:
+    authentication:
+      api-key-authentication:
+        apiKey:
+          allNamespaces: true
+          selector:
+            matchLabels:
+              kuadrant.io/apikeys-by: partner-orders-api-auth
+        credentials:
+          authorizationHeader:
+            prefix: APIKEY

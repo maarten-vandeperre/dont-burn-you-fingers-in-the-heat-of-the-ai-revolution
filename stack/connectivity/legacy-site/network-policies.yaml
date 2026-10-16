@@ -1,0 +1,64 @@
+# The "firewall" around the legacy network. Three rules, in order of how little they open:
+#
+# 1. deny-all-ingress: nothing gets in by default -- not even from another pod in this namespace.
+# 2. allow-skupper-router-ports-only: the *only* hole, and it is narrow on purpose: the Skupper
+#    router's own inter-router/edge ports, open to any source. This looks wide (no `from:`) but
+#    isn't a free pass to the database -- these two ports only ever speak Skupper's own
+#    mutually-authenticated TLS protocol (the router presents/requires a certificate minted from
+#    the one-time AccessGrant token, see connectivity.sh link), so an unrelated caller on these
+#    ports gets a TLS handshake failure, not data. This is the actual security model Service
+#    Interconnect sells: one authenticated port instead of "the database port, open to whoever is
+#    on the right subnet".
+# 3. allow-postgres-from-same-namespace: the real database port (5432) is *not* in rule 2 -- it
+#    stays reachable only from this same namespace (the seed Job, and the Skupper router pod that
+#    the Connector drives), never from anywhere else in the cluster. Everyone outside this
+#    namespace, including a caller on the platform side of the link, only ever talks to the
+#    router's listener/connector pair (platform-site/listener.yaml) -- the boundary this demo is
+#    actually about is the namespace/network boundary, not every pod inside it.
+#
+# Forget rule 3 and the demo still "looks" like it works right up until a query is actually run:
+# the Connector can't reach the database either, so the query just hangs (this is exactly the
+# failure this demo hit while building it -- see docs/demos/10-connectivity.md, "If something
+# goes wrong").
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-all-ingress
+  namespace: legacy-datacenter
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-skupper-router-ports-only
+  namespace: legacy-datacenter
+spec:
+  podSelector:
+    matchLabels:
+      skupper.io/component: router
+  policyTypes: ["Ingress"]
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 55671   # inter-router (site-to-site link)
+        - protocol: TCP
+          port: 45671   # edge (not used by this demo's interior-only sites, opened for completeness)
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-from-same-namespace
+  namespace: legacy-datacenter
+spec:
+  podSelector:
+    matchLabels:
+      app: legacy-inventory-db
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}   # any pod in this namespace: the Skupper router, and the seed Job
+      ports:
+        - protocol: TCP
+          port: 5432

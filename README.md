@@ -19,6 +19,7 @@ complete AI and application platform. Every layer can be installed with `oc` or 
 | GitLab | GitLab CE with the whole repository (`ai-platform/platform`), Keycloak sign-in, registered in Argo CD | GitLab route |
 | Argo CD + Argo Rollouts | OpenShift GitOps (default instance) + cluster-scoped Argo Rollouts | Argo CD route |
 | Tekton | OpenShift Pipelines | console > Pipelines |
+| Connectivity | Red Hat Service Interconnect (cross-network DB link, no VPN) + a Connectivity Link (Kuadrant) Dev Portal demo: self-service API keys, approval workflow, plan-tiered rate limits | `./deploy.sh connectivity` |
 
 ```bash
 export HF_TOKEN=hf_...            # Gemma is gated, see "Hugging Face token for Gemma"
@@ -110,6 +111,20 @@ installs automatically.
 ./deploy.sh tssc run       # signed commit -> verify -> CI checks (mocked, parallel) -> podman build -> sign -> SBOM -> TPA -> ACS -> release -> Argo CD (mocked)
 ```
 Details: `stack/tssc/README.md`; demo: `docs/demos/08-trusted-software-supply-chain.md`.
+
+### 2c. Optional: connectivity (Service Interconnect + Connectivity Link, 10 minutes)
+
+```bash
+./deploy.sh connectivity setup                # Service Interconnect operator + Connectivity Link Dev Portal
+./deploy.sh connectivity legacy                # isolated "legacy" namespace, PostgreSQL, Skupper Site
+./deploy.sh connectivity link                  # link it to the platform, prove it (and prove direct access is blocked)
+./deploy.sh connectivity psql-check
+./deploy.sh connectivity partner-api deploy    # Gateway, HTTPRoute, AuthPolicy, PlanPolicy, APIProduct for orders-service
+./deploy.sh connectivity partner-api signup trial alice alice@partner.example.com
+./deploy.sh connectivity partner-api approve partner-request-xxxxxx   # name printed by signup
+```
+Needs `./deploy.sh app deploy` first (exposes the existing `orders-service`). Details:
+`docs/demos/10-connectivity.md`.
 
 ### 3. Check everything
 
@@ -295,7 +310,7 @@ stack/
   keycloak/                Keycloak "platform-sso", its database, route and realm "demo"
   gitlab/                  GitLab CE (Omnibus) with Keycloak sign-in
   gitops/                  Argo Rollouts RolloutManager
-operators/                 Connectivity Link, LeaderWorkerSet, cert-manager subscriptions
+operators/                 Connectivity Link, Service Interconnect, LeaderWorkerSet, cert-manager subscriptions
 rhoai/                     OpenShift AI operator subscription + lean DSCs (switch-rhoai, stack)
 platform/                  MaaS platform: Kuadrant, Authorino TLS, gateway, PostgreSQL, DSC fields,
                            60-playground (ready-made Gen AI playground, 3.4)
@@ -306,6 +321,7 @@ observability/             RHOAI monitoring stack, telemetry (+ Loki usage logs 
 argocd/                    Application templates (MaaS, observability, stack) + RBAC
 app/                       demo applications (Quarkus, React, Camel, LangChain4j) + deploy/ + demo.sh
   deploy/rollouts-demo/    standalone Argo Rollouts tutorial: 4 strategies, AnalysisTemplate, Tekton pipeline
+stack/connectivity/        Service Interconnect (legacy DB) + Connectivity Link partner API demo (./deploy.sh connectivity)
 docs/demos/                short demo guides
 deploy.sh
 ```

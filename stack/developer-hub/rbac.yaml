@@ -59,7 +59,7 @@ rules:
     resources: [routes]
     verbs: [get, list, watch]
   - apiGroups: [argoproj.io]
-    resources: [rollouts, applications]
+    resources: [rollouts, analysisruns, applications]
     verbs: [get, list, watch]
   - apiGroups: [networking.istio.io, security.istio.io]
     resources: ["*"]

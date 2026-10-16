@@ -13,6 +13,9 @@
 #   urls        Print the URLs of every UI in the stack
 #   app <cmd>   Demo applications in app/ (RAG, mesh patterns, CDC): same as app/demo.sh <cmd>
 #   tssc <cmd>  Trusted software supply chain: setup | run | verify | urls | destroy (stack/tssc/tssc.sh)
+#   connectivity <cmd>  Service Interconnect (legacy DB) + Connectivity Link partner API with
+#               Dev Portal personas: setup | legacy | link | psql-check | partner-api <...> |
+#               status | urls | destroy (stack/connectivity/connectivity.sh)
 #   rhdh        Developer Hub: render the catalog, wire tokens, enable the plugins of the running version
 #   sso         Install / update Keycloak (single sign-on) and GitLab on an existing stack
 #   gitlab      Push this repository into GitLab (group ai-platform) and register it with Argo CD
@@ -2324,6 +2327,7 @@ CMD=$1; shift
 # the demo apps have their own CLI: hand over all remaining arguments untouched
 [[ "$CMD" == "app" ]] && exec "${ROOT_DIR}/app/demo.sh" "$@"
 [[ "$CMD" == "tssc" ]] && exec "${ROOT_DIR}/stack/tssc/tssc.sh" "$@"
+[[ "$CMD" == "connectivity" ]] && exec "${ROOT_DIR}/stack/connectivity/connectivity.sh" "$@"
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case $1 in

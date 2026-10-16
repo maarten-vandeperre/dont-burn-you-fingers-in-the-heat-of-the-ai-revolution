@@ -1,0 +1,19 @@
+# partner-api.<apps-domain> -> OpenShift router (edge TLS, terminated here) -> partner-gateway.
+# Edge, not passthrough: the Gateway above only speaks plain HTTP on its one listener (TLS is
+# Kuadrant/Authorino's and the mesh's job further in, not this Gateway's), so the Route is the
+# TLS boundary towards the internet, same as app/deploy/mesh/ingress-gateway.yaml's own Routes.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: partner-api
+  namespace: ai-demo
+spec:
+  host: REPLACED-BY-KUSTOMIZE
+  to:
+    kind: Service
+    name: partner-gateway-istio   # Service Istio creates for the Gateway above: "<name>-istio"
+  port:
+    targetPort: 80
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

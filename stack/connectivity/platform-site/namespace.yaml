@@ -1,0 +1,8 @@
+# The platform side of the link: any normal namespace, no special network isolation (it is not
+# the one with something to protect). Deliberately its own namespace rather than reusing ai-demo:
+# ai-demo's Istio sidecars and this Skupper router are both "a second container that owns the
+# pod's networking" and the demo is clearer keeping the two concerns apart.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: connectivity-demo

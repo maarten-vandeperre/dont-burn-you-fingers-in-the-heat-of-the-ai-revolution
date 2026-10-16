@@ -1,0 +1,34 @@
+# A second ingress into ai-demo, owned by the platform engineer, separate from ai-demo-gateway
+# (app/deploy/mesh/ingress-gateway.yaml, the demo UI's own ingress). Gateway API's `istio`
+# GatewayClass: Istio programs this as a brand-new Envoy in the *same* Service Mesh 3 control
+# plane as every other ai-demo sidecar -- which matters, because it is what lets this gateway
+# present a certificate the mesh's own PeerAuthentication (STRICT mTLS, app/deploy/mesh) accepts
+# when it calls orders-service. (The platform's other Gateway API class, "openshift-default", is
+# a *different* Istio control plane embedded in the ingress operator -- used by the MaaS gateway
+# in platform/30-gateway -- and a backendRef from there straight into a STRICT-mTLS mesh
+# namespace fails the TLS handshake instead of an RBAC 403. See docs/demos/10-connectivity.md,
+# "If something goes wrong".)
+#
+# `allowedRoutes.from: Same`: only HTTPRoutes in this same namespace (ai-demo) may attach -- the
+# app team that owns orders-service also owns the HTTPRoute (httproute.yaml), AuthPolicy
+# (auth-policy.yaml), PlanPolicy (plan-policy.yaml) and APIProduct (api-product.yaml) for it;
+# the platform engineer only owns this Gateway object and the default policy below
+# (mesh-authorization.yaml's `partner-gateway-from-router`, the equivalent of
+# ai-demo-gateway's own `gateway-from-router`).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: partner-gateway
+  namespace: ai-demo
+  annotations:
+    networking.istio.io/service-type: ClusterIP   # exposed via route.yaml, no LoadBalancer needed
+spec:
+  gatewayClassName: istio
+  listeners:
+    - name: http
+      hostname: REPLACED-BY-KUSTOMIZE
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same

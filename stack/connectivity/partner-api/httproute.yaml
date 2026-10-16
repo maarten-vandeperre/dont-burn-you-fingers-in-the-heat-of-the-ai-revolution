@@ -1,0 +1,18 @@
+# The API team's own route: orders-service's existing /api/orders, reachable from outside the
+# cluster for the first time. No code in orders-service changed; it has no idea this exists.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: partner-orders-api
+  namespace: ai-demo
+spec:
+  parentRefs:
+    - name: partner-gateway
+  hostnames:
+    - REPLACED-BY-KUSTOMIZE
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /api/orders}
+      backendRefs:
+        - name: orders-service
+          port: 8080

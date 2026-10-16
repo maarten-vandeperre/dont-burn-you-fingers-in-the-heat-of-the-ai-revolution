@@ -1,0 +1,12 @@
+# Publishes the real Postgres Service onto the Skupper virtual network under the routing key
+# "legacy-inventory-db". Nothing outside this namespace ever sees this Connector or the Service
+# it points at directly -- platform-site/listener.yaml is what the other side gets instead.
+apiVersion: skupper.io/v2alpha1
+kind: Connector
+metadata:
+  name: legacy-inventory-db
+  namespace: legacy-datacenter
+spec:
+  routingKey: legacy-inventory-db
+  selector: app=legacy-inventory-db
+  port: 5432

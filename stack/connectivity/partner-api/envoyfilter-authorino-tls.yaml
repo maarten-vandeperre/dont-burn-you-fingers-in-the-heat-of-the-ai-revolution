@@ -1,0 +1,61 @@
+# Fixes a gap in Kuadrant's own EnvoyFilter for this Gateway: Authorino's gRPC authorization
+# service (authorino-authorino-authorization:50051) has TLS enabled on this cluster
+# (kuadrant-system Authorino CR: spec.listener.tls.enabled: true, cert from
+# authorino-server-cert, signed by the OpenShift service CA) -- but the EnvoyFilter that the
+# kuadrant-operator auto-generates for a plain Gateway API Gateway/AuthPolicy
+# (kuadrant-auth-partner-gateway, see `oc get envoyfilter -n ai-demo`) talks to it in plaintext.
+# Without this fix, every request gets a 500 from the partner-gateway's Envoy
+# ("wasm log kuadrant-wasm-shim: gRPC status code is not OK" in its logs) because the TLS-only
+# server rejects the plaintext connection.
+#
+# The MaaS Gateway (maas-default-gateway, platform/30-gateway/) doesn't hit this because ODH's
+# odh-model-controller already ships an equivalent fix for its own LLMInferenceService integration
+# (EnvoyFilter/maas-default-gateway-authn-ssl in openshift-ingress) -- this is the same fix,
+# narrowed to partner-gateway, for a Gateway that isn't managed by ODH.
+#
+# priority: -1 makes Istio apply this patch before the kuadrant-operator's own (unprioritized)
+# EnvoyFilter for the same cluster name, so this TLS-enabled definition wins.
+#
+# If a future kuadrant-operator release adds TLS-awareness for Authorino's listener config to its
+# own generated EnvoyFilter, this file becomes redundant and can be deleted -- check
+# `oc get envoyfilter kuadrant-auth-partner-gateway -n ai-demo -o yaml` for a transport_socket.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: partner-gateway-authn-ssl
+  namespace: ai-demo
+spec:
+  priority: -1
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: partner-gateway
+  configPatches:
+    - applyTo: CLUSTER
+      match:
+        cluster:
+          service: authorino-authorino-authorization.kuadrant-system.svc.cluster.local
+      patch:
+        operation: ADD
+        value:
+          name: kuadrant-auth-service
+          type: STRICT_DNS
+          connect_timeout: 1s
+          lb_policy: ROUND_ROBIN
+          http2_protocol_options: {}
+          load_assignment:
+            cluster_name: kuadrant-auth-service
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: authorino-authorino-authorization.kuadrant-system.svc.cluster.local
+                          port_value: 50051
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              common_tls_context:
+                validation_context:
+                  trusted_ca:
+                    filename: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt

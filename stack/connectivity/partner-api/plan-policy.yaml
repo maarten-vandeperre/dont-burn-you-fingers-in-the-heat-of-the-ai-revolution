@@ -1,0 +1,27 @@
+# The API owner's business tiers for this API -- the part of "platform engineering" that has
+# nothing to do with the platform team: whoever owns orders-service decides what "trial" and
+# "partner" mean in requests/day, not whoever runs the Gateway. `predicate` reads the plan tier
+# straight off the authenticated identity's Secret (the annotation the devportal controller sets
+# when an APIKeyApproval is approved -- see connectivity.sh `partner-api approve`); Limitador
+# enforces whichever `limits` matched first.
+apiVersion: extensions.kuadrant.io/v1alpha1
+kind: PlanPolicy
+metadata:
+  name: partner-orders-api-plans
+  namespace: ai-demo
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: partner-orders-api
+  plans:
+    - tier: partner
+      predicate: |
+        has(auth.identity) && auth.identity.metadata.annotations["secret.kuadrant.io/plan-id"] == "partner"
+      limits:
+        daily: 1000
+    - tier: trial
+      predicate: |
+        has(auth.identity) && auth.identity.metadata.annotations["secret.kuadrant.io/plan-id"] == "trial"
+      limits:
+        daily: 20

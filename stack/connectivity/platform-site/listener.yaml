@@ -1,0 +1,14 @@
+# The other end of the virtual service: a plain ClusterIP Service named "legacy-inventory-db"
+# (Skupper creates it from this Listener) that proxies to whatever Connector in the whole Skupper
+# network published the same routingKey -- here, legacy-site/connector.yaml. Any pod in this
+# namespace reaches the legacy database with a completely ordinary
+# `psql -h legacy-inventory-db -p 5432 ...`, no Skupper-specific client, no VPN config.
+apiVersion: skupper.io/v2alpha1
+kind: Listener
+metadata:
+  name: legacy-inventory-db
+  namespace: connectivity-demo
+spec:
+  routingKey: legacy-inventory-db
+  host: legacy-inventory-db
+  port: 5432

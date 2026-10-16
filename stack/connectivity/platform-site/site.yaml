@@ -1,0 +1,7 @@
+# This site has no `linkAccess`: it is the one that *redeems* the other site's AccessGrant
+# (connectivity.sh `link`), not one that needs to be linked into from elsewhere for this demo.
+apiVersion: skupper.io/v2alpha1
+kind: Site
+metadata:
+  name: connectivity-demo
+  namespace: connectivity-demo

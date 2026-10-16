@@ -1,0 +1,11 @@
+# Stands in for an on-prem / legacy network: its own namespace, reachable from nowhere else in
+# the cluster except through the Skupper router (network-policies.yaml). In a real rollout this
+# would be a separate cluster, or no Kubernetes at all (Skupper also runs as a standalone process
+# next to a VM-hosted database) -- the point this demo makes does not depend on it being a second
+# namespace on the same cluster, only on nothing else being able to reach it directly.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: legacy-datacenter
+  labels:
+    pod-security.kubernetes.io/enforce: baseline

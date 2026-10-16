@@ -176,9 +176,17 @@ Every step below has three parts: **Do** (what you type or click), **You see**, 
 * **Do:** the **CD** tab.
 * **You see:** empty until `./deploy.sh app argorollouts gitops <url>` creates the Argo CD
   Application `rollouts-demo` (`argocd/app-name: rollouts-demo` on every one of the four
-  Components points at the same Application).
+  Components points at the same Application). Once it exists and has synced, the tab shows a
+  **Deployment lifecycle** card for `rollouts-demo` — status, commit, resource count. Click the
+  card to open its side panel: a live resource table (every Service/Route/Rollout/AnalysisRun
+  Argo CD manages for this Application) and, underneath it, a **Rollout > Revisions** widget —
+  one card per revision, each showing the container image and the live traffic percentage, with
+  the currently-stable revision marked. Watch it change in real time while a canary from Part A
+  or a promote from Part B is in flight.
 * **Say:** "Kubernetes, CI and CD are three different read-only views of the same namespace, on
-  every one of the four components — not just a link out, actual cluster state."
+  every one of the four components — not just a link out, actual cluster state. The Rollout
+  widget specifically comes from the Argo CD plugin reading the `Rollout`/`AnalysisRun` custom
+  resources it's been told about — nothing here is a bespoke plugin we wrote."
 
 **E3. A day-2 action without leaving the browser.**
 * **Do:** Developer Hub > **Create** > **Argo Rollouts: canary release** > Action **Release a new
@@ -259,6 +267,36 @@ Every step below has three parts: **Do** (what you type or click), **You see**, 
   be added here too, or it never gets mounted into the Developer Hub pod even though
   `catalog-info.yaml`'s own `targets:` already references it by name (this bit the first build of
   this very demo; see "If something goes wrong").
+* **The CD tab's Rollout widget, end to end** — four pieces, all already in this repo:
+  1. Each Rollout carries `app.kubernetes.io/instance: rollouts-demo` (see e.g.
+     [`canary.yaml`](../../app/deploy/rollouts-demo/canary.yaml) `metadata.labels`) — this is how
+     the Argo CD plugin maps a `Rollout` object to the GitOps Application named in the Component's
+     `argocd/app-name` annotation. It is a *different* label from
+     `app.kubernetes.io/part-of: rollouts-demo` (used elsewhere for grouping); both are needed.
+  2. [`stack/developer-hub/app-config.yaml`](../../stack/developer-hub/app-config.yaml)'s
+     `kubernetes.customResources` lists both `rollouts` and `analysisruns`
+     (`group: argoproj.io, apiVersion: v1alpha1`) — without `analysisruns` the widget renders but
+     never shows analysis-gated progress.
+  3. [`stack/developer-hub/rbac.yaml`](../../stack/developer-hub/rbac.yaml)'s ClusterRole grants
+     `get`/`list`/`watch` on `rollouts`, `analysisruns` and `applications` (`argoproj.io`) to the
+     Kubernetes-plugin ServiceAccount.
+  4. [`stack/developer-hub/dynamic-plugins.yaml`](../../stack/developer-hub/dynamic-plugins.yaml)'s
+     `backstage-community-plugin-argocd` entry needs an explicit `pluginConfig` mounting
+     `ArgocdDeploymentSummary` on `entity.page.overview/cards` and `ArgocdDeploymentLifecycle` on
+     `entity.page.cd/cards` (condition `isArgocdConfigured`). The plugin ships its own bundled
+     default config, but `install-dynamic-plugins` only auto-merges that default for plugins that
+     are part of RHDH's base image (Tekton, Kubernetes, Topology, ...); an added-on OCI plugin like
+     this one needs the override repeated in our own `dynamic-plugins.yaml`, or neither the
+     Overview summary card nor the CD tab appear at all, with no error anywhere. The plugin's own
+     bundled default also uses an `importName: ArgocdPage` that does not exist in this plugin
+     version (2.8.1) and silently renders nothing — use the exact `ArgocdDeploymentSummary`/
+     `ArgocdDeploymentLifecycle` names from [the RHDH 1.10 docs](https://docs.redhat.com/en/documentation/red_hat_developer_hub/1.10/html/configuring_dynamic_plugins/install-and-configure-argo-cd_configuring-dynamic-plugins)
+     instead.
+
+  Nothing here is a custom plugin — it is the already-installed `@backstage-community/plugin-argocd`
+  (its Argo Rollouts support shipped in
+  [backstage/community-plugins#1153](https://github.com/backstage/community-plugins/pull/1153)),
+  wired up with configuration only.
 * [`app/demo.sh`](../../app/demo.sh) (search for `argorollouts`): the `argorollouts` function and
   its `rollouts_*` helpers — point at `rollouts_release`'s `--type=json` patches and
   `rollouts_promote`/`abort`/`retry`'s `--subresource=status` (the Rollout CRD declares `status`
@@ -406,6 +444,23 @@ To remove the whole tutorial: `oc delete -k app/deploy/rollouts-demo` (or
 * **Leftover `Job`/`AnalysisRun`/`PipelineRun` objects accumulating after repeated testing:** the
   AnalysisTemplate's Job already self-cleans after 5 minutes (`ttlSecondsAfterFinished: 300`); for
   everything else: `oc delete analysisrun,pipelinerun,job -n rollouts-demo --all`.
+* **The CD tab never appears on any catalog entity (not just this demo's), even with
+  `argocd/app-name` set and the Argo CD backend otherwise working:** check
+  `oc logs -n rhdh deploy/backstage-developer-hub -c install-dynamic-plugins | grep -A3
+  plugin-argocd` — if the line `Merging plugin-specific configuration` is missing right after it,
+  the frontend plugin's own bundled mount-point config was not picked up. Add the `pluginConfig`
+  override shown in Part G's "CD tab's Rollout widget" bullet to
+  `stack/developer-hub/dynamic-plugins.yaml`, re-apply (`oc apply -k stack/developer-hub`) and
+  restart (`oc rollout restart deployment/backstage-developer-hub -n rhdh`); confirm with
+  `curl -sk https://<rhdh-route>/ | grep -A20 '"backstage-community.plugin-argocd"'` that
+  `entity.page.cd/cards` now shows up in the page's embedded config.
+* **The Rollout widget shows a different revision history than expected, or only appears for one
+  of the four `rollouts-*` components:** all four Rollouts in this demo share a single Argo CD
+  Application (`rollouts-demo`), so the CD tab's "Deployment lifecycle" card is the same for every
+  one of the four catalog Components — it is an Application-level view, not scoped to the specific
+  Rollout a given Component's annotations point at. This is expected with one shared GitOps
+  Application per demo; a production setup with one Application per service would not have this
+  ambiguity.
 * **`docker.io/argoproj/rollouts-demo:blue` image pull fails from `quay.io` instead:** this
   tutorial intentionally pins `docker.io/argoproj/rollouts-demo`, not the `quay.io` mirror some
   older Argo Rollouts docs reference — the `quay.io` copy returned `unauthorized` when this was

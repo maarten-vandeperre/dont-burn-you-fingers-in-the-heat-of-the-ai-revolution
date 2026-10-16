@@ -1,0 +1,25 @@
+# The catalog entry a partner developer actually sees in the Dev Portal: what this API is, who
+# owns it, and (approvalMode: manual) that a human signs off on every access request instead of
+# auto-issuing keys. Only reconciled once AuthPolicy + PlanPolicy above both target the same
+# HTTPRoute and are themselves enforced -- status.conditions explains exactly which of the three
+# is still missing if something's wrong (AuthSchemeNotFound / PlanPolicyDiscovered=False / ...).
+apiVersion: devportal.kuadrant.io/v1alpha1
+kind: APIProduct
+metadata:
+  name: partner-orders-api
+  namespace: ai-demo
+spec:
+  displayName: "Partner Orders API"
+  description: "Read-only access to Platform Coffee's order history, for logistics/delivery partners."
+  version: v1
+  approvalMode: manual
+  tags: ["orders", "partner", "coffee-shop"]
+  contact:
+    team: "Platform Coffee / orders"
+    email: orders-team@example.com
+  documentation:
+    gitRepository: app/orders-service
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: partner-orders-api
