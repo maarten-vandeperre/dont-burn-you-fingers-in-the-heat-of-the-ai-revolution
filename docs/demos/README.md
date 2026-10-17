@@ -17,6 +17,8 @@ demo takes 5 to 10 minutes and works on its own; all of them use the same runnin
 | [8. Trusted software supply chain](08-trusted-software-supply-chain.md) | Signed commit in Dev Spaces (gitsign + Trusted Artifact Signer), pipeline: verify, CI, sign, SBOM, Trusted Profile Analyzer, ACS checks, release, Argo CD |
 | [9. Argo Rollouts](09-argo-rollouts.md) | Four strategies standalone: canary, blue-green, blue-green with pre-promotion analysis, canary with post-promotion analysis; Tekton pipeline, Developer Hub day-2 actions and live Argo CD "CD" tab showing per-revision Rollout traffic |
 | [10. Connectivity](10-connectivity.md) | Red Hat Service Interconnect (legacy database, no VPN), Service Mesh (pointer to demo 2), Red Hat Connectivity Link (partner API, Dev Portal personas, self-service signup/approval, plan-tiered rate limits) |
+| [11. Ansible](11-ansible.md) | The default Ansible plugin + a software template that launches an AAP workflow to install PostgreSQL on OpenShift, replacing an existing one only after a human approves; a second, standalone delete workflow with the same approval gate |
+| [12. Custom plugin, step by step](12-custom-plugin-pod-status.md) | Building a Developer Hub plugin from nothing: a backend reading pod name/status for a namespace from the OpenShift API, a frontend card, packaged and loaded as dynamic plugins |
 | [Guarded Coffee](../../app/coffee-guardrails/DEMO.md) | NeMo Guardrails (TrustyAI) on the laptop: coffee only, 200 character limits, PII masking, no cappuccino after noon; same config on OpenShift AI |
 | [Camel on the laptop](../../app/camel-ai-demo/README.md) | Local Camel demo: one API for Qwen (Podman AI Lab), OpenAI and Anthropic, files, live routes, Kaoto and Hawtio |
 | [7. Platform Coffee](07-coffee-shop.md) | One app, every capability: AI ordering, menu releases and chaos in the mesh, CDC audit trail |
@@ -41,6 +43,7 @@ export OPENAI_API_KEY=sk-...           # optional, enables "openai" and the fall
 ./deploy.sh app argorollouts deploy    # only for demo 9 (standalone canary/blue-green tutorial)
 ./deploy.sh connectivity setup         # only for demo 10 (Service Interconnect, Connectivity Link)
 ./deploy.sh connectivity legacy && ./deploy.sh connectivity link && ./deploy.sh connectivity partner-api deploy
+./deploy.sh ansible setup && ./deploy.sh rhdh   # only for demo 11 (AAP + the two workflows)
 ./deploy.sh urls; ./deploy.sh app urls # all URLs
 ```
 

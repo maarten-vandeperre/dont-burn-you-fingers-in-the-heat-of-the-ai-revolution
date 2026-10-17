@@ -1,0 +1,59 @@
+# The identity the pod-status backend plugin uses to read pods -- its own ServiceAccount, not a
+# reuse of rhdh-kubernetes (stack/developer-hub/rbac.yaml). Same least-privilege habit as every
+# other integration on this platform: one narrowly-scoped identity per integration, not one shared
+# superuser token. Read-only, and only `pods` -- not pods/log, not pods/exec, nothing else.
+#
+# Namespace-scoped on purpose: this ClusterRole only grants rights when actually bound. Bind it
+# with a RoleBinding in every namespace you want the plugin to see (ai-demo, ansible-demo,
+# rollouts-demo below as examples) -- a ClusterRoleBinding would make it cluster-wide, which is
+# more than this demo plugin needs.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pod-status-reader
+  namespace: rhdh
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pod-status-reader-token
+  namespace: rhdh
+  annotations:
+    kubernetes.io/service-account.name: pod-status-reader
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pod-status-reader
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pod-status-reader
+  namespace: ai-demo
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: pod-status-reader}
+subjects:
+  - {kind: ServiceAccount, name: pod-status-reader, namespace: rhdh}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pod-status-reader
+  namespace: ansible-demo
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: pod-status-reader}
+subjects:
+  - {kind: ServiceAccount, name: pod-status-reader, namespace: rhdh}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: pod-status-reader
+  namespace: rollouts-demo
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: pod-status-reader}
+subjects:
+  - {kind: ServiceAccount, name: pod-status-reader, namespace: rhdh}

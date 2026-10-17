@@ -1,0 +1,47 @@
+# The identity the Ansible playbooks use (via the kubernetes.core collection) to manage the demo
+# PostgreSQL. It becomes an AAP Controller Credential of type "OpenShift or Kubernetes API Bearer
+# Token" (built into Controller, see ansible/README.md "Credentials"). Scoped to the
+# "ansible-demo" namespace only and to the exact object kinds the two playbooks touch -- same
+# least-privilege pattern as rhdh-platform-actions in stack/developer-hub/rbac.yaml, just for
+# Ansible instead of Backstage templates.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ansible-postgres-admin
+  namespace: ansible-demo
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ansible-postgres-admin-token
+  namespace: ansible-demo
+  annotations:
+    kubernetes.io/service-account.name: ansible-postgres-admin
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ansible-postgres-admin
+  namespace: ansible-demo
+rules:
+  - apiGroups: [""]
+    resources: [services, secrets, configmaps, persistentvolumeclaims, pods, pods/log]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ansible-postgres-admin
+  namespace: ansible-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ansible-postgres-admin
+subjects:
+  - kind: ServiceAccount
+    name: ansible-postgres-admin
+    namespace: ansible-demo

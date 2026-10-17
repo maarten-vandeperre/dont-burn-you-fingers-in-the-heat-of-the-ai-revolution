@@ -1,0 +1,12 @@
+# The AAP instance + the demo namespace/credential it runs the playbooks against.
+# operator.yaml is applied separately first (./deploy.sh ansible setup) and waits for the
+# AnsibleAutomationPlatform CRD, the same two-step pattern stack/developer-hub uses for the
+# Backstage CRD.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+commonAnnotations:
+  argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+resources:
+  - namespace-demo.yaml
+  - aap.yaml
+  - rbac.yaml

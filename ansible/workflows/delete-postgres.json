@@ -1,0 +1,22 @@
+{
+  "name": "delete-postgres",
+  "description": "Kicked off from Developer Hub's 'Delete PostgreSQL' software template (template-ansible-delete-postgres.yaml), or directly from AAP. Always asks for approval first -- there is no unapproved path to this job template in either workflow.",
+  "nodes": [
+    {
+      "identifier": "approval",
+      "unified_job_template": {
+        "type": "workflow_approval_template",
+        "name": "Approve PostgreSQL deletion (standalone)",
+        "description": "This deletes the demo PostgreSQL in ansible-demo: Deployment, Service, PVC and the credentials Secret. Approve to proceed, deny to stop here.",
+        "timeout": 3600
+      }
+    },
+    {
+      "identifier": "delete",
+      "unified_job_template": {"type": "job_template", "name": "delete-postgres"}
+    }
+  ],
+  "edges": [
+    {"from": "approval", "to": "delete", "state": "success"}
+  ]
+}

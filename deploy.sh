@@ -16,6 +16,10 @@
 #   connectivity <cmd>  Service Interconnect (legacy DB) + Connectivity Link partner API with
 #               Dev Portal personas: setup | legacy | link | psql-check | partner-api <...> |
 #               status | urls | destroy (stack/connectivity/connectivity.sh)
+#   ansible <cmd>  Ansible Automation Platform (AAP) + 2 playbooks + 2 workflows (install with
+#               manual-approval delete, and a standalone delete) + the Developer Hub Ansible
+#               plugin: setup | bootstrap | token | urls | run <workflow> | approve | deny |
+#               status | reset | destroy (stack/ansible/ansible.sh)
 #   rhdh        Developer Hub: render the catalog, wire tokens, enable the plugins of the running version
 #   sso         Install / update Keycloak (single sign-on) and GitLab on an existing stack
 #   gitlab      Push this repository into GitLab (group ai-platform) and register it with Argo CD
@@ -1418,7 +1422,10 @@ Argo CD backend|(argo-?cd-backend|argocd-backend)
 Argo CD|plugin-(redhat-)?argocd(-dynamic)?([:@!]|$);;roadiehq-backstage-plugin-argo-cd(-dynamic)?([:@!]|$)
 Scaffolder HTTP request|scaffolder-backend-module-http-request
 Scaffolder Kubernetes|scaffolder-backend-module-kubernetes
-Scaffolder GitLab|plugin-scaffolder-backend-module-gitlab(-dynamic)?([:@!]|$)"
+Scaffolder GitLab|plugin-scaffolder-backend-module-gitlab(-dynamic)?([:@!]|$)
+Ansible catalog backend|ansible-backstage-plugin-catalog-backend-module-rhaap
+Ansible|ansible-plugin-backstage-rhaap([:@!]|$)
+Ansible scaffolder|ansible-plugin-scaffolder-backend-module-backstage-rhaap"
 
 RHDH_DIR() { echo "${ROOT_DIR}/stack/developer-hub"; }
 
@@ -1687,6 +1694,33 @@ rhdh_list_plugins() {
 
 sa_secret_value() { oc get secret rhdh-secrets -n rhdh -o jsonpath="{.data.$1}" 2>/dev/null | base64 -d 2>/dev/null || true; }
 
+rhdh_registry_auth_secret() {
+  # The install-dynamic-plugins init container pulls OCI plugin packages (e.g. the Ansible
+  # plugins under registry.redhat.io/ansible-automation-platform/...) with its own `skopeo copy`
+  # call -- it does NOT use the pod's imagePullSecrets, any cluster-level
+  # ImageDigestMirrorSet/ImageTagMirrorSet, or the OpenShift global pull secret. Without this it
+  # fails with "unable to retrieve auth token: invalid username/password: unauthorized" even
+  # though the *cluster* can already pull registry.redhat.io images fine. The operator mounts a
+  # Secret's single key as one file (see the Backstage CR's extraFiles.secrets entry below), so we
+  # build a minimal auth.json containing just the registry.redhat.io credentials already present
+  # in the cluster-wide pull secret (openshift-config/pull-secret) -- no separate manual step
+  # needed on clusters where that already carries registry.redhat.io entitlement.
+  local auth
+  auth=$(oc get secret pull-secret -n openshift-config -o jsonpath='{.data.\.dockerconfigjson}' 2>/dev/null | base64 -d 2>/dev/null \
+    | jq -c '{auths: {"registry.redhat.io": (.auths["registry.redhat.io"] // empty)}} | select(.auths["registry.redhat.io"] != null)' 2>/dev/null || true)
+  if [[ -z "$auth" || "$auth" == "null" ]]; then
+    warn "openshift-config/pull-secret has no registry.redhat.io entry -- OCI plugins from registry.redhat.io (e.g. Ansible) will fail to install with
+'unauthorized: Please login to the Red Hat Registry'. Get a pull secret from https://access.redhat.com/terms-based-registry/ and either merge it into
+openshift-config/pull-secret, or create dynamic-plugins-registry-auth yourself:
+  oc create secret generic dynamic-plugins-registry-auth -n rhdh --from-file=auth.json=<path-to-auth.json>"
+    return 0
+  fi
+  oc create secret generic dynamic-plugins-registry-auth -n rhdh \
+    --from-literal=auth.json="$auth" \
+    --dry-run=client -o yaml | oc apply --server-side --force-conflicts --field-manager=maas-stack -f - >/dev/null
+  ok "dynamic-plugins-registry-auth: registry.redhat.io credentials for the install-dynamic-plugins init container"
+}
+
 configure_rhdh() {
   need oc
   step "Developer Hub: catalog, credentials and plugins"
@@ -1696,12 +1730,19 @@ configure_rhdh() {
   rhdh_render_catalog "$domain"
   wait_until 600 "Developer Hub operator (Backstage CRD)" crd_exists backstages.rhdh.redhat.com || true
   rhdh_align_api_version || die "install the Developer Hub operator first: ./deploy.sh stack (or check the subscription above)"
+  oc get namespace rhdh >/dev/null 2>&1 || oc create namespace rhdh >/dev/null
+  rhdh_registry_auth_secret
   apply_k "$(RHDH_DIR)" maas-stack >/dev/null && ok "Developer Hub resources applied"
 
   wait_until 120 "service account tokens issued" bash -c "[[ -n \"\$(oc get secret rhdh-kubernetes-token -n rhdh -o jsonpath='{.data.token}')\" && -n \"\$(oc get secret rhdh-platform-actions-token -n rhdh -o jsonpath='{.data.token}')\" ]]" \
     || die "tokens for rhdh-kubernetes / rhdh-platform-actions were not issued"
   backend=$(sa_secret_value BACKEND_SECRET); [[ -n "$backend" ]] || backend=$(rand_hex)
   argo=$(oc get secret openshift-gitops-cluster -n "$GITOPS_NS" -o jsonpath='{.data.admin\.password}' 2>/dev/null | base64 -d 2>/dev/null || true)
+  local ansible_host ansible_token
+  # "ansible-automation-platform" route is the AAP Platform Gateway -- it proxies the Controller
+  # API at "/api/controller/v2/...", which is what ansible.rhaap.baseUrl below points the plugin at.
+  ansible_host=$(oc get route ansible-automation-platform -n aap -o jsonpath='{.spec.host}' 2>/dev/null || true)
+  ansible_token=$(oc get secret rhdh-ansible-token -n aap -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true)
   oc create secret generic rhdh-secrets -n rhdh \
     --from-literal=BACKEND_SECRET="$backend" \
     --from-literal=K8S_CLUSTER_NAME=openshift \
@@ -1711,8 +1752,10 @@ configure_rhdh() {
     --from-literal=ARGOCD_PASSWORD="${argo:-pending}" \
     --from-literal=DEVHUB_CLIENT_SECRET="$(oc get secret keycloak-sso-demo -n keycloak -o jsonpath='{.data.DEVHUB_CLIENT_SECRET}' 2>/dev/null | base64 -d 2>/dev/null || echo pending)" \
     --from-literal=GITLAB_TOKEN="$(gitlab_token || true)" \
+    --from-literal=ANSIBLE_URL="${ansible_host:+https://${ansible_host}}" \
+    --from-literal=ANSIBLE_TOKEN="${ansible_token:-pending}" \
     --dry-run=client -o yaml | oc apply --server-side --force-conflicts --field-manager=maas-stack -f - >/dev/null
-  ok "rhdh-secrets: Kubernetes read token, template action token, Argo CD $([[ -n "$argo" ]] && echo password || echo 'not installed')"
+  ok "rhdh-secrets: Kubernetes read token, template action token, Argo CD $([[ -n "$argo" ]] && echo password || echo 'not installed'), Ansible Automation Platform $([[ -n "$ansible_token" ]] && echo token || echo 'not installed (./deploy.sh ansible setup)')"
 
   wait_until 900 "a running Developer Hub pod (needed to read its plugin catalog)" rhdh_ready_pod \
     || die "Developer Hub is not running: oc get pods -n rhdh"
@@ -2328,6 +2371,7 @@ CMD=$1; shift
 [[ "$CMD" == "app" ]] && exec "${ROOT_DIR}/app/demo.sh" "$@"
 [[ "$CMD" == "tssc" ]] && exec "${ROOT_DIR}/stack/tssc/tssc.sh" "$@"
 [[ "$CMD" == "connectivity" ]] && exec "${ROOT_DIR}/stack/connectivity/connectivity.sh" "$@"
+[[ "$CMD" == "ansible" ]] && exec "${ROOT_DIR}/stack/ansible/ansible.sh" "$@"
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case $1 in

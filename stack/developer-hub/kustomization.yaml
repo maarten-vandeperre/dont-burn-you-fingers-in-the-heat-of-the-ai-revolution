@@ -42,6 +42,9 @@ configMapGenerator:
       - catalog/template-rollouts-bluegreen.yaml
       - catalog/template-rollouts-bluegreen-analysis.yaml
       - catalog/template-rollouts-canary-analysis.yaml
+      - catalog/ansible-demo.yaml
+      - catalog/template-ansible-install-postgres.yaml
+      - catalog/template-ansible-delete-postgres.yaml
       - catalog/software-templates.yaml
     options:
       disableNameSuffixHash: true

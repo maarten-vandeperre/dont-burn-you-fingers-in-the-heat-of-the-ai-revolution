@@ -97,6 +97,19 @@ data:
               username: admin
               password: ${ARGOCD_PASSWORD}
 
+    # Ansible plugin (ansible-plugin-backstage-rhaap) + the rhaap:launch-job-template scaffolder
+    # action: both talk to the AAP Platform Gateway, which proxies the Controller REST API at
+    # "/api/controller/v2/..." -- ANSIBLE_URL is the gateway's own host (https://<route>), not a
+    # bare Controller host. ANSIBLE_URL/ANSIBLE_TOKEN are "pending" until ./deploy.sh ansible
+    # setup has stood up the in-cluster AAP instance (stack/ansible, docs/demos/11-ansible.md).
+    # Point this at a different/external AAP instance instead by setting the same two env vars;
+    # nothing else in Developer Hub changes, it is the same API either way.
+    ansible:
+      rhaap:
+        baseUrl: ${ANSIBLE_URL}
+        token: ${ANSIBLE_TOKEN}
+        checkSSL: false
+
     # Write path for the software templates (http:backstage:request -> this proxy -> Kubernetes
     # API) with the narrowly scoped rhdh-platform-actions token. Only GET and PATCH.
     proxy:

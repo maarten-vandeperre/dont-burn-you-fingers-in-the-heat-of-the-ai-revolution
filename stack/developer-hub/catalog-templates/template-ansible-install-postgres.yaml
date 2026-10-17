@@ -1,0 +1,58 @@
+# The "abstraction through a software template" plugin 2 of demo 11 asks for: a developer clicks
+# Create, Developer Hub launches the AAP workflow "install-postgres-safe" (ansible/workflows/
+# install-postgres-safe.json) through the rhaap:launch-job-template scaffolder action -- nobody
+# touches AAP, a kubeconfig or an ansible-playbook command. The "pipeline" being kicked started
+# here is that Ansible workflow, not a Tekton Pipeline.
+#
+# The `token` field uses Backstage's built-in `ui:field: Secret` -- paste the demo service
+# account's token from `./deploy.sh ansible token`. Its value is masked in the UI/review step and
+# only available to steps as `secrets.token`, never `parameters.token` (which stays empty; see
+# https://backstage.io/docs/features/software-templates/writing-templates/#ui-field-secret).
+# AAPTokenField (the ansible-plugin-backstage-self-service frontend plugin) can instead
+# auto-inject the signed-in user's own AAP session token and hide this field entirely, but that
+# needs a *separate* OAuth2 auth provider registered as `auth.providers.rhaap` (the
+# auth-backend-module-rhaap-provider plugin + an OAuth Application created in AAP with
+# clientId/clientSecret and redirect URI https://<rhdh-host>/api/auth/rhaap/handler/frame) --
+# without it the popup fails with "Unknown auth provider 'rhaap'!". Not set up by this repo
+# because of that extra manual AAP-side step; swap `ui:field: Secret` for `ui:field:
+# AAPTokenField` if you add that provider (token stays `${{ secrets.token }}` -> `secrets.aapToken`).
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: ansible-install-postgres
+  title: "Ansible: install PostgreSQL"
+  description: Installs the demo PostgreSQL on OpenShift. If one already exists, the workflow pauses for a human's approval before replacing it.
+  tags: [ansible, postgresql, workflow]
+spec:
+  owner: platform-team
+  type: automation-template
+  parameters:
+    - title: Approval
+      description: Paste the demo service account's AAP token (./deploy.sh ansible token) -- shown so nobody is surprised a pending database gets asked about before the workflow touches it
+      properties:
+        token:
+          title: AAP Token
+          type: string
+          ui:field: Secret
+  steps:
+    - id: launch-job
+      name: install-postgres-safe
+      action: rhaap:launch-job-template
+      input:
+        token: ${{ secrets.token }}
+        waitForCompletion: false
+        values:
+          template: install-postgres-safe
+  output:
+    links:
+      - title: ansible-demo system
+        entityRef: system:default/ansible-demo
+    text:
+      - title: Workflow launched
+        content: |
+          **Workflow job ID:** ${{ steps['launch-job'].output.data.id }}
+          **Status:** ${{ steps['launch-job'].output.data.status }}
+
+          If a PostgreSQL Deployment already exists in `ansible-demo`, this workflow is now paused
+          on a **Workflow Approval** node -- approve or deny it in AAP (Jobs > this workflow run),
+          or from the CLI: `./deploy.sh ansible approve` / `./deploy.sh ansible deny`.

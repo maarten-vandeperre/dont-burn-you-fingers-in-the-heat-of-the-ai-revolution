@@ -1,0 +1,63 @@
+# Demo 11: Ansible integration (docs/demos/11-ansible.md). AAP (Ansible Automation Platform) is the Controller behind both the
+# default Ansible plugin (dynamic-plugins.yaml) and the two software templates
+# (template-ansible-install-postgres.yaml, template-ansible-delete-postgres.yaml).
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: ansible-demo
+  title: "Ansible: PostgreSQL lifecycle on OpenShift"
+  description: Install/delete a demo PostgreSQL through two AAP workflows -- the delete step always needs a human's approval
+  links:
+    - {url: "https://ansible-automation-platform-aap.apps.cluster-cfhnl.dyn.redhatworkshops.io", title: Ansible Automation Platform, icon: dashboard}
+    - {url: "https://gitlab-gitlab.apps.cluster-cfhnl.dyn.redhatworkshops.io/ai-platform/platform/-/tree/main/ansible", title: Source (GitLab)}
+    - {url: "https://gitlab-gitlab.apps.cluster-cfhnl.dyn.redhatworkshops.io/ai-platform/platform/-/blob/main/ansible/README.md", title: "ansible/README.md: getting started, maintaining playbooks and workflows"}
+spec:
+  owner: platform-team
+  domain: ai-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: ansible-demo-postgres
+  title: "Demo PostgreSQL (ansible-demo)"
+  description: Deployment/Service/PVC/Secret managed only by the install-postgres / delete-postgres playbooks -- never edit it with oc directly
+  annotations:
+    backstage.io/kubernetes-namespace: ansible-demo
+    backstage.io/kubernetes-label-selector: managed-by=ansible
+  tags: [ansible, postgresql]
+spec:
+  type: database
+  owner: platform-team
+  system: ansible-demo
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: ansible-install-postgres-safe
+  title: "AAP workflow: install-postgres-safe"
+  description: "check-postgres -> (exists) Workflow Approval -> delete-postgres -> install-postgres; (absent) -> install-postgres directly"
+  links:
+    - {url: "https://ansible-automation-platform-aap.apps.cluster-cfhnl.dyn.redhatworkshops.io/#/templates", title: "Workflow Templates (AAP)"}
+    - {url: "https://gitlab-gitlab.apps.cluster-cfhnl.dyn.redhatworkshops.io/ai-platform/platform/-/blob/main/ansible/workflows/install-postgres-safe.json", title: "Workflow definition (source)"}
+  tags: [ansible, workflow]
+spec:
+  type: ansible-workflow
+  owner: platform-team
+  system: ansible-demo
+  dependsOn: [resource:ansible-demo-postgres]
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: ansible-delete-postgres
+  title: "AAP workflow: delete-postgres"
+  description: "Workflow Approval -> delete-postgres. Standalone: no install step, nothing else runs without an approval first"
+  links:
+    - {url: "https://ansible-automation-platform-aap.apps.cluster-cfhnl.dyn.redhatworkshops.io/#/templates", title: "Workflow Templates (AAP)"}
+    - {url: "https://gitlab-gitlab.apps.cluster-cfhnl.dyn.redhatworkshops.io/ai-platform/platform/-/blob/main/ansible/workflows/delete-postgres.json", title: "Workflow definition (source)"}
+  tags: [ansible, workflow]
+spec:
+  type: ansible-workflow
+  owner: platform-team
+  system: ansible-demo
+  dependsOn: [resource:ansible-demo-postgres]

@@ -1,0 +1,7 @@
+# Where the Ansible playbooks (ansible/playbooks/) install and delete the demo PostgreSQL.
+# Separate from "aap" (the AAP instance itself) on purpose: the credential the playbooks run with
+# (rbac.yaml) is scoped to only this namespace, nothing wider.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ansible-demo

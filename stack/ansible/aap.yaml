@@ -1,0 +1,51 @@
+# The AnsibleAutomationPlatform instance for this demo. One unified custom resource creates the
+# Platform Gateway (single external Route / login / API front door for everything below),
+# Automation Controller (Projects, Job Templates, Workflow Job Templates, approvals -- the part
+# this demo actually uses) and its own PostgreSQL. Automation Hub and EDA are disabled: this demo
+# doesn't need a private content hub or event-driven rulebooks, just Controller.
+#
+# Sized small on purpose (demo, not production): trim the resource/storage requirements further
+# down, or drop them entirely to take the operator's own defaults, if your cluster is tight.
+#
+# image_pull_secrets below is only needed if your cluster's cluster-wide pull secret
+# (openshift-config/pull-secret) does not already carry registry.redhat.io credentials entitled
+# for AAP -- if it's missing, OpenShift logs a harmless "Unable to retrieve some image pull
+# secrets" event and falls back to the node-level secret; `./deploy.sh ansible setup` only tells
+# you to create it if pods actually end up ImagePullBackOff. See ansible/README.md.
+apiVersion: aap.ansible.com/v1alpha1
+kind: AnsibleAutomationPlatform
+metadata:
+  name: ansible-automation-platform
+  namespace: aap
+spec:
+  admin_user: admin
+
+  database:
+    storage_requirements:
+      requests:
+        storage: 5Gi
+
+  controller:
+    disabled: false
+    image_pull_secrets:
+      - aap-registry-pull-secret
+    task_resource_requirements:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    web_resource_requirements:
+      requests:
+        cpu: 250m
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+
+  eda:
+    disabled: true
+
+  hub:
+    disabled: true

@@ -1,0 +1,44 @@
+# The second Ansible workflow the demo asks for: delete the database on its own, independent of
+# the install flow. Same action, same shape as template-ansible-install-postgres.yaml (see that
+# file's header comment for why `token` is a plain password field and not AAPTokenField), different
+# workflow name -- this is the point of the abstraction: a new day-2 action is a new Template file
+# with a different `values.template`, nothing else changes.
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: ansible-delete-postgres
+  title: "Ansible: delete PostgreSQL"
+  description: Deletes the demo PostgreSQL on OpenShift. Always pauses for a human's approval first -- there is no unapproved path to the delete playbook.
+  tags: [ansible, postgresql, workflow]
+spec:
+  owner: platform-team
+  type: automation-template
+  parameters:
+    - title: Approval
+      description: Paste the demo service account's AAP token (./deploy.sh ansible token) -- this always asks for approval in AAP before anything is deleted
+      properties:
+        token:
+          title: AAP Token
+          type: string
+          ui:field: Secret
+  steps:
+    - id: launch-job
+      name: delete-postgres
+      action: rhaap:launch-job-template
+      input:
+        token: ${{ secrets.token }}
+        waitForCompletion: false
+        values:
+          template: delete-postgres
+  output:
+    links:
+      - title: ansible-demo system
+        entityRef: system:default/ansible-demo
+    text:
+      - title: Workflow launched
+        content: |
+          **Workflow job ID:** ${{ steps['launch-job'].output.data.id }}
+          **Status:** ${{ steps['launch-job'].output.data.status }}
+
+          Paused on **Workflow Approval** -- approve or deny in AAP, or
+          `./deploy.sh ansible approve` / `./deploy.sh ansible deny`.

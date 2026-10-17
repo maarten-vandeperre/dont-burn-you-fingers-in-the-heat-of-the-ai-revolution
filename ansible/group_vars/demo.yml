@@ -1,0 +1,17 @@
+# Shared defaults for every playbook in playbooks/. This is the one file most Day-2 changes touch
+# (image, sizing, storage) -- see README.md "Change the Postgres version or sizing".
+# Real credentials never belong here: install_postgres.yml generates a random password the first
+# time it creates the Secret, and reuses whatever is already in the cluster on every later run
+# (idempotent -- see README.md "Idempotency and re-runs").
+postgres_namespace: ansible-demo
+postgres_app_name: postgres-demo
+postgres_image: "registry.redhat.io/rhel9/postgresql-16:latest"
+postgres_db: appdb
+postgres_user: appuser
+postgres_secret_name: "{{ postgres_app_name }}-credentials"
+postgres_pvc_size: 1Gi
+postgres_cpu_request: 100m
+postgres_cpu_limit: "500m"
+postgres_memory_request: 256Mi
+postgres_memory_limit: 512Mi
+postgres_port: 5432

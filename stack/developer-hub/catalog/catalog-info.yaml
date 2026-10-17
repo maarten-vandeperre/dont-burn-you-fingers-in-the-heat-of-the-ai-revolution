@@ -20,4 +20,7 @@ spec:
     - ./template-rollouts-bluegreen.yaml
     - ./template-rollouts-bluegreen-analysis.yaml
     - ./template-rollouts-canary-analysis.yaml
+    - ./ansible-demo.yaml
+    - ./template-ansible-install-postgres.yaml
+    - ./template-ansible-delete-postgres.yaml
     - ./software-templates.yaml

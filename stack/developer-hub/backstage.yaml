@@ -14,6 +14,17 @@ spec:
       mountPath: /opt/app-root/src/catalog
       configMaps:
         - name: rhdh-catalog
+      # install-dynamic-plugins pulls OCI plugin packages (e.g. the Ansible plugins under
+      # registry.redhat.io) with its own `skopeo copy` -- it does NOT use this pod's
+      # imagePullSecrets or the cluster-wide pull secret, so registry.redhat.io credentials have
+      # to be supplied here explicitly. Secret created by `./deploy.sh rhdh`
+      # (rhdh_registry_auth_secret in deploy.sh) from openshift-config/pull-secret.
+      secrets:
+        - name: dynamic-plugins-registry-auth
+          key: auth.json
+          mountPath: /opt/app-root/src/.config/containers/auth.json
+          containers:
+            - install-dynamic-plugins
     extraEnvs:
       configMaps:
         - name: rhdh-cluster-params

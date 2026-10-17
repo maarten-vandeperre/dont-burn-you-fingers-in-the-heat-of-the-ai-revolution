@@ -1,0 +1,35 @@
+# Decides which branch the "Install PostgreSQL (safe)" workflow takes next (see
+# ansible/workflows/install-postgres-safe.json and README.md "How the workflows branch").
+#
+# AAP workflows branch on *job status*, not on a variable, so this playbook's only job is to
+# end successfully when there is nothing to do, and to *fail on purpose* when the database already
+# exists -- that single exit code is the whole decision:
+#   rc 0 (success) -> workflow follows "on success" -> straight to install-postgres
+#   rc 1 (failed)  -> workflow follows "on failure" -> Workflow Approval -> delete-postgres -> install-postgres
+#
+# Never has side effects: read-only (kubernetes.core.k8s_info), safe to run as often as you like,
+# including by hand to check current state: `ansible-playbook playbooks/check_postgres.yml`.
+---
+- name: Check whether the demo PostgreSQL already exists
+  hosts: demo
+  gather_facts: false
+  tasks:
+    - name: Look up the Deployment
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        api_version: apps/v1
+        name: "{{ postgres_app_name }}"
+        namespace: "{{ postgres_namespace }}"
+      register: existing_deployment
+
+    - name: Record the result for the AAP job output (ansible-runner / "Jobs" tab)
+      ansible.builtin.set_stats:
+        data:
+          postgres_exists: "{{ existing_deployment.resources | length > 0 }}"
+
+    - name: Fail on purpose when the database already exists (this is what drives the workflow branch)
+      ansible.builtin.fail:
+        msg: >-
+          Deployment {{ postgres_app_name }} already exists in {{ postgres_namespace }}.
+          The workflow will now ask for approval before deleting it.
+      when: existing_deployment.resources | length > 0

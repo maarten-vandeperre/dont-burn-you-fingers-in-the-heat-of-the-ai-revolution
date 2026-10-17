@@ -2,6 +2,14 @@
 # (Developer Hub 1.10.5).
 # Every package is pinned (digest, tag or bundled path), so nothing depends on version inheritance.
 # Commit this file when you deploy with Argo CD.
+#
+# IMPORTANT: `./deploy.sh rhdh` REWRITES THIS WHOLE FILE from scratch every time it runs (see
+# rhdh_generate_plugins() in deploy.sh) -- it keeps each plugin's `package:` line (matching
+# RHDH_PLUGINS regexes against this file's current content, not just RHDH's own default/extension
+# catalog), but it DROPS every hand-written `pluginConfig:` block unconditionally. Both custom
+# blocks below (Argo CD and Ansible) must be re-added after every `./deploy.sh rhdh` run. Confirmed
+# live: a plain `./deploy.sh rhdh` run strips both, even though it keeps the Ansible `package:`
+# lines themselves.
 includes:
   - dynamic-plugins.default.yaml
 plugins:
@@ -11,11 +19,11 @@ plugins:
     disabled: false
   - package: './dynamic-plugins/dist/backstage-community-plugin-topology'
     disabled: false
-  - package: 'oci://ghcr.io/redhat-developer/rhdh-plugin-export-overlays/backstage-community-plugin-tekton@sha256:49093c5f91e6d46c7b43a9efe26e1705ee501dee2766578b04a9745775bffe60'  # extensions
+  - package: 'oci://ghcr.io/redhat-developer/rhdh-plugin-export-overlays/backstage-community-plugin-tekton@sha256:49093c5f91e6d46c7b43a9efe26e1705ee501dee2766578b04a9745775bffe60!backstage-community-plugin-tekton'
     disabled: false
   - package: 'oci://ghcr.io/redhat-developer/rhdh-plugin-export-overlays/roadiehq-backstage-plugin-argo-cd-backend@sha256:39f4ea164aa3c430595ee2a0921ce021a1ea48aea2a57ae937b6d476bcc86c8b'
     disabled: false
-  - package: 'oci://ghcr.io/redhat-developer/rhdh-plugin-export-overlays/backstage-community-plugin-argocd:bs_1.49.4__2.8.1!backstage-community-plugin-argocd'  # extensions
+  - package: 'oci://ghcr.io/redhat-developer/rhdh-plugin-export-overlays/backstage-community-plugin-argocd:bs_1.49.4__2.8.1!backstage-community-plugin-argocd'
     disabled: false
     # The OCI export bundles its own app-config.dynamic.yaml, but install-dynamic-plugins only
     # auto-merges that for plugins preconfigured in RHDH's base image (tekton, kubernetes,
@@ -51,9 +59,59 @@ plugins:
                   if:
                     allOf:
                       - isArgocdConfigured
-  - package: 'oci://registry.access.redhat.com/rhdh/roadiehq-scaffolder-backend-module-http-request@sha256:4868bcc51d9f6356cf76fdfa0e1ad9f151c7a0518fb840ab7c909972d84d015d'  # extensions
+  - package: 'oci://registry.access.redhat.com/rhdh/roadiehq-scaffolder-backend-module-http-request@sha256:4868bcc51d9f6356cf76fdfa0e1ad9f151c7a0518fb840ab7c909972d84d015d!roadiehq-scaffolder-backend-module-http-request'
     disabled: false
   - package: './dynamic-plugins/dist/backstage-community-plugin-scaffolder-backend-module-kubernetes-dynamic'
     disabled: false
   - package: './dynamic-plugins/dist/backstage-plugin-scaffolder-backend-module-gitlab-dynamic'
     disabled: false
+  # --- Ansible: the default/official Ansible plugin for Developer Hub (demo 11, docs/demos/11-ansible.md) ---
+  # Not in RHDH's own extensions catalog (it ships with AAP, not with Developer Hub), so
+  # rhdh_generate_plugins() can never auto-discover it from scratch -- "not offered by this
+  # Developer Hub version, skipped" would be printed if the `package:` lines below weren't already
+  # present in this file for its regex-matching fallback to find and keep (see RHDH_PLUGINS in
+  # deploy.sh). The `pluginConfig` blocks always still need to be re-added by hand (see file header).
+  #
+  # Package names and the OCI tag (2.2, not "latest" -- registry.redhat.io rejects "latest" for
+  # this repository) confirmed against:
+  # https://docs.redhat.com/en/documentation/red_hat_ansible_automation_platform/2.6/install-assembly_rhdh_ocp_required_installation
+  # and `oc image info registry.redhat.io/ansible-automation-platform/automation-portal:2.2`
+  # (needs registry.redhat.io credentials in whatever pull secret `oc image info` reads from --
+  # bump the tag if this version has since been superseded).
+  - package: 'oci://registry.redhat.io/ansible-automation-platform/automation-portal:2.2!ansible-plugin-backstage-rhaap'
+    disabled: false
+    pluginConfig:
+      dynamicPlugins:
+        frontend:
+          ansible.plugin-backstage-rhaap:
+            appIcons:
+              - importName: AnsibleLogo
+                name: AnsibleLogo
+            dynamicRoutes:
+              - importName: AnsiblePage
+                path: /ansible
+                menuItem:
+                  icon: AnsibleLogo
+                  text: Ansible
+  # Catalog-backend sync: turns AAP Job/Workflow Job Templates into Template entities the
+  # Ansible tab and this repo's own catalog-templates/ansible-demo.yaml Resources link against.
+  # NOT "ansible-plugin-backstage-rhaap-backend" -- that package does not exist; confirmed via the
+  # docs link above and https://github.com/ansible/ansible-backstage-plugins.
+  - package: 'oci://registry.redhat.io/ansible-automation-platform/automation-portal:2.2!ansible-backstage-plugin-catalog-backend-module-rhaap'
+    disabled: false
+  - package: 'oci://registry.redhat.io/ansible-automation-platform/automation-portal:2.2!ansible-plugin-scaffolder-backend-module-backstage-rhaap'
+    disabled: false
+    pluginConfig:
+      dynamicPlugins:
+        backend:
+          ansible.plugin-scaffolder-backend-module-backstage-rhaap: null
+  # Not installed: ansible-plugin-backstage-self-service, which provides AAPTokenFieldExtension
+  # (a `ui:field: AAPTokenField` that auto-fetches the signed-in user's own AAP token via an
+  # OAuth2 popup instead of them pasting one into the form). That popup needs a *separate* OAuth2
+  # auth provider registered as `auth.providers.rhaap` -- the auth-backend-module-rhaap-provider
+  # plugin plus an OAuth Application created in AAP (clientId/clientSecret, redirect URI
+  # https://<rhdh-host>/api/auth/rhaap/handler/frame) -- which this repo does not set up, so the
+  # two "Ansible: ..." software templates use the built-in `ui:field: Secret` instead (paste
+  # the output of `./deploy.sh ansible token`). Add all of that plus this package back if you want
+  # the one-click experience.
+  # --- end Ansible ---

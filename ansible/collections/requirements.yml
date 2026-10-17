@@ -1,0 +1,14 @@
+# AAP only auto-installs collections.yml/roles.yml found at the *Project root* (the repo
+# root here, since this is a monorepo and the Project points at the whole repository) -- not at
+# this path. AAP's default supported execution environment already bundles kubernetes.core
+# (check Administration > Execution Environments in the AAP UI for the exact image your instance
+# ships), which is all these playbooks need, so this file is not relied on by
+# ./deploy.sh ansible setup. Keep it anyway: it documents the exact collection/version the
+# playbooks are written against, and it is what a laptop run uses.
+# On a laptop: `ansible-galaxy collection install -r ansible/collections/requirements.yml`.
+# If your execution environment does *not* bundle kubernetes.core, either build a custom EE that
+# does (see AAP's docs on execution environments, "ansible-builder") or copy this file to the
+# repository root as `collections/requirements.yml` so AAP's Project sync picks it up.
+collections:
+  - name: kubernetes.core
+    version: ">=3.0.0"

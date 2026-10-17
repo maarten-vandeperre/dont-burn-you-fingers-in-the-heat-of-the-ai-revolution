@@ -20,6 +20,8 @@ complete AI and application platform. Every layer can be installed with `oc` or 
 | Argo CD + Argo Rollouts | OpenShift GitOps (default instance) + cluster-scoped Argo Rollouts | Argo CD route |
 | Tekton | OpenShift Pipelines | console > Pipelines |
 | Connectivity | Red Hat Service Interconnect (cross-network DB link, no VPN) + a Connectivity Link (Kuadrant) Dev Portal demo: self-service API keys, approval workflow, plan-tiered rate limits | `./deploy.sh connectivity` |
+| Ansible | Red Hat Ansible Automation Platform (AAP) 2.6, in-cluster, + the default Developer Hub Ansible plugin + a software template that launches a workflow to install PostgreSQL (replacing an existing one only after manual approval) + a standalone delete workflow | `./deploy.sh ansible`, [demo 11](docs/demos/11-ansible.md) |
+| Custom Developer Hub plugin | Step-by-step tutorial building a plugin from nothing: a backend listing pod name/status for a namespace from the OpenShift API, a frontend card, packaged as dynamic plugins | [`backstage-plugins/`](backstage-plugins/), [demo 12](docs/demos/12-custom-plugin-pod-status.md) |
 
 ```bash
 export HF_TOKEN=hf_...            # Gemma is gated, see "Hugging Face token for Gemma"
@@ -126,6 +128,20 @@ Details: `stack/tssc/README.md`; demo: `docs/demos/08-trusted-software-supply-ch
 Needs `./deploy.sh app deploy` first (exposes the existing `orders-service`). Details:
 `docs/demos/10-connectivity.md`.
 
+### 2d. Optional: Ansible in Developer Hub (10 minutes, plus AAP startup)
+
+Needs a Red Hat Ansible Automation Platform subscription (registry.redhat.io image pull access)
+-- see `ansible/README.md` "Red Hat subscription and the image pull secret" first.
+
+```bash
+./deploy.sh ansible setup     # AAP 2.6 (in-cluster), the demo namespace/credential,
+                               # 3 Job Templates, 2 Workflow Job Templates (with approval gates)
+./deploy.sh rhdh              # wires the Ansible plugin + the two "Ansible: ..." software templates
+```
+Needs `./deploy.sh gitlab` first (AAP's Project syncs this repository's `ansible/` folder from
+there). Playbooks, workflows, and how to maintain them: `ansible/README.md`; demo:
+`docs/demos/11-ansible.md`.
+
 ### 3. Check everything
 
 ```bash
@@ -192,7 +208,8 @@ Hub into the entry point for the whole platform:
 | Kubernetes + Topology | Read-only `rhdh-kubernetes` service account (cluster `view` + logs and the CRDs used here). Workloads carry `backstage.io/kubernetes-id`; Topology shows the ai-demo services with their connections, routes, the Argo Rollout, VirtualServices, the LLMInferenceServices, Kafka and Debezium resources |
 | Tekton | PipelineRuns from `app/demo.sh pipeline` are labelled per component and show up in its CI tab |
 | Argo CD | Sync status of the stack Applications and of `ai-demo` (`app/demo.sh gitops <git-url>`) |
-| Software templates (Create) | Switch the rag-service traffic pattern (canary with weight, A/B, blue, green, mirror); start / abort / retry the model-router Argo Rollout; scale a demo Deployment; scale a MaaS model (0 replicas of Qwen shows the OpenAI fallback); release / promote / abort / retry each of the four standalone Argo Rollouts demos (canary, blue-green, blue-green + analysis, canary + analysis), the last two with a "simulate a failure" switch |
+| Software templates (Create) | Switch the rag-service traffic pattern (canary with weight, A/B, blue, green, mirror); start / abort / retry the model-router Argo Rollout; scale a demo Deployment; scale a MaaS model (0 replicas of Qwen shows the OpenAI fallback); release / promote / abort / retry each of the four standalone Argo Rollouts demos (canary, blue-green, blue-green + analysis, canary + analysis), the last two with a "simulate a failure" switch; launch an Ansible workflow to install (or, with approval, replace) or delete the demo PostgreSQL (`./deploy.sh ansible setup`, [demo 11](docs/demos/11-ansible.md)) |
+| Ansible | The default Ansible plugin, pointed at an in-cluster AAP Controller, plus a custom pod-status plugin tutorial ([demo 12](docs/demos/12-custom-plugin-pod-status.md)) showing how to add your own |
 
 Templates write through a Developer Hub proxy (`/platform-actions`) with the separate
 `rhdh-platform-actions` token, which may only patch VirtualServices, Rollouts and replicas in
@@ -322,6 +339,9 @@ argocd/                    Application templates (MaaS, observability, stack) + 
 app/                       demo applications (Quarkus, React, Camel, LangChain4j) + deploy/ + demo.sh
   deploy/rollouts-demo/    standalone Argo Rollouts tutorial: 4 strategies, AnalysisTemplate, Tekton pipeline
 stack/connectivity/        Service Interconnect (legacy DB) + Connectivity Link partner API demo (./deploy.sh connectivity)
+stack/ansible/             Ansible Automation Platform (AAP) + demo namespace/credential (./deploy.sh ansible)
+ansible/                   playbooks + AAP workflow definitions the Ansible demo runs (see ansible/README.md)
+backstage-plugins/         source for the custom Developer Hub plugin tutorial (demo 12)
 docs/demos/                short demo guides
 deploy.sh
 ```

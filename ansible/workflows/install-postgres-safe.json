@@ -1,0 +1,35 @@
+{
+  "name": "install-postgres-safe",
+  "description": "Kicked off from Developer Hub's 'Install PostgreSQL' software template (template-ansible-install-postgres.yaml). Installs the demo database; if one already exists it asks a human before replacing it.",
+  "_comment_nodes": "identifier is this file's own name for the node; unified_job_template.name is resolved against the job templates in job-templates.json (type job_template) or created fresh (type workflow_approval_template) by stack/ansible/ansible.sh bootstrap",
+  "nodes": [
+    {
+      "identifier": "check",
+      "unified_job_template": {"type": "job_template", "name": "check-postgres"}
+    },
+    {
+      "identifier": "approval",
+      "unified_job_template": {
+        "type": "workflow_approval_template",
+        "name": "Approve PostgreSQL deletion",
+        "description": "A PostgreSQL Deployment already exists in ansible-demo. Approve to delete and reinstall it; deny to stop here and leave it untouched.",
+        "timeout": 3600
+      }
+    },
+    {
+      "identifier": "delete",
+      "unified_job_template": {"type": "job_template", "name": "delete-postgres"}
+    },
+    {
+      "identifier": "install",
+      "unified_job_template": {"type": "job_template", "name": "install-postgres"}
+    }
+  ],
+  "_comment_edges": "state is which branch of the 'from' node this edge follows: success | failure | always",
+  "edges": [
+    {"from": "check", "to": "install", "state": "success"},
+    {"from": "check", "to": "approval", "state": "failure"},
+    {"from": "approval", "to": "delete", "state": "success"},
+    {"from": "delete", "to": "install", "state": "success"}
+  ]
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "name": "check-postgres",
+    "description": "Read-only: does the demo PostgreSQL Deployment already exist? Fails on purpose if it does -- that failure is what the workflows branch on.",
+    "playbook": "ansible/playbooks/check_postgres.yml",
+    "job_type": "run"
+  },
+  {
+    "name": "install-postgres",
+    "description": "Creates the Secret, PVC, Deployment and Service for the demo PostgreSQL in namespace ansible-demo. Idempotent.",
+    "playbook": "ansible/playbooks/install_postgres.yml",
+    "job_type": "run"
+  },
+  {
+    "name": "delete-postgres",
+    "description": "Deletes the demo PostgreSQL's Deployment, Service, PVC and credentials Secret. Only ever launched after a Workflow Approval node.",
+    "playbook": "ansible/playbooks/delete_postgres.yml",
+    "job_type": "run"
+  }
+]

@@ -1,0 +1,127 @@
+# Installs the demo PostgreSQL: a Secret (generated credentials), a PersistentVolumeClaim, a
+# Deployment and a ClusterIP Service, all in the "ansible-demo" namespace. Runs as the last node of
+# the "Install PostgreSQL (safe)" workflow (see ansible/workflows/install-postgres-safe.json) --
+# by the time this playbook starts, check_postgres.yml has already confirmed (directly, or after
+# an approved delete) that no Deployment of this name exists.
+#
+# Idempotent: kubernetes.core.k8s with state: present only changes what actually differs from the
+# cluster, and the credentials Secret is only *created* if missing, never regenerated -- re-running
+# this playbook against an already-installed database is a no-op (see README.md "Idempotency and
+# re-runs"). That's why it is also safe to run on its own, outside the workflow, to pick up a
+# group_vars/demo.yml change (e.g. a bumped postgres_image): `ansible-playbook playbooks/install_postgres.yml`.
+---
+- name: Install the demo PostgreSQL
+  hosts: demo
+  gather_facts: false
+  tasks:
+    - name: Does the credentials Secret already exist?
+      kubernetes.core.k8s_info:
+        kind: Secret
+        name: "{{ postgres_secret_name }}"
+        namespace: "{{ postgres_namespace }}"
+      register: existing_secret
+
+    - name: Generate a password (only the first time; re-runs reuse the existing Secret untouched)
+      ansible.builtin.set_fact:
+        postgres_password: "{{ lookup('ansible.builtin.password', '/dev/null chars=ascii_letters,digits length=24') }}"
+      when: existing_secret.resources | length == 0
+
+    - name: Credentials Secret (only created once; a re-run with an existing Secret never reaches here)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ postgres_secret_name }}"
+            namespace: "{{ postgres_namespace }}"
+            labels: {app: "{{ postgres_app_name }}", managed-by: ansible}
+          type: Opaque
+          stringData:
+            database-name: "{{ postgres_db }}"
+            database-user: "{{ postgres_user }}"
+            database-password: "{{ postgres_password }}"
+      when: existing_secret.resources | length == 0
+
+    - name: PersistentVolumeClaim
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "{{ postgres_app_name }}-data"
+            namespace: "{{ postgres_namespace }}"
+            labels: {app: "{{ postgres_app_name }}", managed-by: ansible}
+          spec:
+            accessModes: [ReadWriteOnce]
+            resources:
+              requests:
+                storage: "{{ postgres_pvc_size }}"
+
+    - name: Deployment
+      kubernetes.core.k8s:
+        state: present
+        wait: true
+        wait_timeout: 300
+        wait_condition:
+          type: Available
+          status: "True"
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: "{{ postgres_app_name }}"
+            namespace: "{{ postgres_namespace }}"
+            labels: {app: "{{ postgres_app_name }}", managed-by: ansible}
+          spec:
+            replicas: 1
+            strategy: {type: Recreate}
+            selector:
+              matchLabels: {app: "{{ postgres_app_name }}"}
+            template:
+              metadata:
+                labels: {app: "{{ postgres_app_name }}"}
+              spec:
+                containers:
+                  - name: postgresql
+                    image: "{{ postgres_image }}"
+                    ports: [{containerPort: "{{ postgres_port }}", name: postgresql}]
+                    envFrom:
+                      - secretRef: {name: "{{ postgres_secret_name }}"}
+                    env:
+                      - {name: POSTGRESQL_DATABASE, valueFrom: {secretKeyRef: {name: "{{ postgres_secret_name }}", key: database-name}}}
+                      - {name: POSTGRESQL_USER, valueFrom: {secretKeyRef: {name: "{{ postgres_secret_name }}", key: database-user}}}
+                      - {name: POSTGRESQL_PASSWORD, valueFrom: {secretKeyRef: {name: "{{ postgres_secret_name }}", key: database-password}}}
+                    resources:
+                      requests: {cpu: "{{ postgres_cpu_request }}", memory: "{{ postgres_memory_request }}"}
+                      limits: {cpu: "{{ postgres_cpu_limit }}", memory: "{{ postgres_memory_limit }}"}
+                    volumeMounts:
+                      - {name: data, mountPath: /var/lib/pgsql/data}
+                    readinessProbe:
+                      exec: {command: ["pg_isready", "-h", "127.0.0.1", "-p", "{{ postgres_port }}"]}
+                      initialDelaySeconds: 10
+                      periodSeconds: 10
+                volumes:
+                  - name: data
+                    persistentVolumeClaim: {claimName: "{{ postgres_app_name }}-data"}
+
+    - name: Service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: "{{ postgres_app_name }}"
+            namespace: "{{ postgres_namespace }}"
+            labels: {app: "{{ postgres_app_name }}", managed-by: ansible}
+          spec:
+            selector: {app: "{{ postgres_app_name }}"}
+            ports: [{port: "{{ postgres_port }}", targetPort: "{{ postgres_port }}", name: postgresql}]
+
+    - name: Summary (AAP "Jobs" tab / Developer Hub job output)
+      ansible.builtin.set_stats:
+        data:
+          postgres_service: "{{ postgres_app_name }}.{{ postgres_namespace }}.svc.cluster.local:{{ postgres_port }}"
+          postgres_credentials_secret: "{{ postgres_secret_name }}"
