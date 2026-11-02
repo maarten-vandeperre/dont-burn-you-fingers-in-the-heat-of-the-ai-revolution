@@ -168,3 +168,36 @@ spec:
   owner: ai-app-team
   system: ai-demo
   providesApis: [coffee-menu-api]
+---
+# The trusted software supply chain pipeline for coffee-menu (demo 8). A separate catalog item
+# because it runs in its own namespace (tssc-ci, deliberately outside the service mesh) with its
+# own Tekton Pipeline (trusted-supply-chain), distinct from the generic build-service pipeline the
+# other components use. subcomponentOf links it back to coffee-menu in the catalog graph.
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: coffee-menu-tssc
+  title: "coffee-menu: trusted software supply chain"
+  description: >-
+    Signed-commit-to-signed-image pipeline for coffee-menu: Trusted Artifact Signer (commit and
+    image signatures, Rekor), mocked static analysis / unit / integration tests, podman build,
+    SBOM via syft, Trusted Profile Analyzer vulnerability check, Argo CD sync.
+  annotations:
+    backstage.io/kubernetes-id: coffee-menu-tssc
+    backstage.io/kubernetes-namespace: tssc-ci
+    backstage.io/source-location: url:https://__GITLAB_HOST__/ai-platform/platform/-/tree/main/app/coffee-menu/
+    tekton.dev/cicd: "true"
+    argocd/app-name: ai-demo
+  links:
+    - {url: "https://__GITLAB_HOST__/ai-platform/platform/-/tree/main/app/coffee-menu", title: "Source code (GitLab)"}
+    - {url: "__DEVSPACES_URL__", title: "Open in Dev Spaces", icon: web}
+    - {url: "https://console-openshift-console.__APPS_DOMAIN__/k8s/ns/tssc-ci/tekton.dev~v1~Pipeline/trusted-supply-chain", title: "Tekton pipeline (OpenShift console)"}
+    - {url: "https://console-openshift-console.__APPS_DOMAIN__/k8s/ns/tssc-ci/tekton.dev~v1~PipelineRun", title: "PipelineRuns (OpenShift console)"}
+  tags: [tekton, cosign, gitsign, sigstore, sbom, trusted-supply-chain]
+spec:
+  type: ci-pipeline
+  lifecycle: production
+  owner: ai-app-team
+  system: ai-demo
+  subcomponentOf: component:coffee-menu
+  dependsOn: [resource:trusted-artifact-signer, resource:trusted-profile-analyzer, resource:dev-spaces]

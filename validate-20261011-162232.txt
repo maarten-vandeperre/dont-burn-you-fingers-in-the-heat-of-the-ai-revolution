@@ -1,0 +1,81 @@
+STAT  AREA           CHECK                                          DETAIL
+PASS  cluster        OpenShift version                              4.22.16 
+PASS  operators      OpenShift AI 3.4                               Succeeded 
+FAIL  operators      Connectivity Link                              no Succeeded CSV 'rhcl-operator*' (oc get csv -A | grep rhcl-operator) 
+PASS  operators      LeaderWorkerSet                                Succeeded 
+PASS  operators      cert-manager                                   Succeeded 
+PASS  operators      OpenShift GitOps (Argo CD + Rollouts)          Succeeded 
+PASS  operators      OpenShift Pipelines (Tekton)                   Succeeded 
+PASS  operators      Service Mesh 3                                 Succeeded 
+PASS  operators      Kiali                                          Succeeded 
+PASS  operators      Streams for Apache Kafka                       Succeeded 
+PASS  operators      Developer Hub                                  Succeeded 
+PASS  operators      Keycloak (RHBK)                                Succeeded 
+PASS  operators      Cluster Observability                          Succeeded 
+PASS  operators      Tempo                                          Succeeded 
+PASS  operators      OpenTelemetry                                  Succeeded 
+PASS  rhoai          DataScienceCluster Ready                       phase=Ready 
+PASS  rhoai          DSCInitialization Ready                        phase=Ready 
+PASS  rhoai          MLflow instance                                present 
+FAIL  rhoai          observability dashboard datasource             datasource present, auth fix not succeeded yet (perses-auth-fix-29862080=): oc logs -n redhat-ods-monitoring job/perses-auth-fix-now 
+PASS  maas           Gateway programmed                             Programmed=True 
+PASS  maas           maas-api                                       ready 1/1 
+PASS  models         gemma-3-270m-it Ready                          Ready=True 
+PASS  models         qwen3-0-6b Ready                               Ready=True 
+PASS  models         MaaSModelRef gemma                             phase=Ready 
+PASS  models         MaaSModelRef qwen                              phase=Ready 
+FAIL  playground     LlamaStackDistribution ai-tenants              phase=Initializing 
+FAIL  playground     MaaS key for the playground                    secret ai-tenants/lsd-maas-api-keys missing 
+PASS  tracing        Tempo                                          Ready=True 
+PASS  tracing        OpenTelemetry collector                        ready 1/1 
+PASS  tracing        Console traces plugin                          present 
+PASS  tracing        AI traces to MLflow (coffee shop)              experiment 1, workspace ai-demo 
+PASS  mesh           Istio control plane                            Ready=True 
+PASS  mesh           Istio CNI                                      Ready=True 
+PASS  mesh           Kiali                                          ready 1/1 
+PASS  mesh           Bookinfo demo                                  ready 1/1 
+PASS  kafka          Kafka cluster                                  Ready=True 
+PASS  kafka          Kafka Connect (Debezium)                       Ready=True 
+PASS  kafka          Debezium connector                             Ready=True 
+PASS  kafka          connector captures coffee tables               inventory.customers,inventory.orders,coffee.orders,coffee.order_lines 
+PASS  gitops         Argo CD                                        ready 1/1 
+PASS  gitops         Argo Rollouts                                   
+PASS  gitops         Tekton (TektonConfig)                          Ready=True 
+PASS  sso            Keycloak platform-sso                          Ready=True 
+PASS  sso            realm demo imported                            Done=True 
+PASS  sso            realm demo reachable (OIDC discovery)          HTTP 200 https://platform-sso-keycloak.apps.cluster-cfhnl.dyn.redhatworkshops.io/realms/demo/.well-known/openid-configuration 
+PASS  gitlab         GitLab                                         ready 1/1 
+PASS  gitlab         sign-in page                                   HTTP 200 https://gitlab-gitlab.apps.cluster-cfhnl.dyn.redhatworkshops.io/users/sign_in 
+PASS  gitlab         project ai-platform/platform                   HTTP 200 https://gitlab-gitlab.apps.cluster-cfhnl.dyn.redhatworkshops.io/api/v4/projects/ai-platform%2Fplatform 
+PASS  rhdh           Developer Hub                                  ready 1/1 
+PASS  rhdh           health                                         HTTP 200 https://backstage-developer-hub-rhdh.apps.cluster-cfhnl.dyn.redhatworkshops.io/.backstage/health/v1/readiness 
+PASS  rhdh           Keycloak sign-in configured                    oidc via Keycloak realm demo 
+PASS  rhdh           secrets wired (OIDC, GitLab, tokens)           keys set: DEVHUB_CLIENT_SECRET GITLAB_TOKEN K8S_CLUSTER_TOKEN K8S_ACTIONS_TOKEN ARGOCD_PASSWORD 
+FAIL  rhdh           plugins configured                             enabled: kubernetes-backend topology tekton argocd http-request | missing: argo-cd-backend 
+FAIL  rhdh           plugins installed                              ERROR failed at line 1778: tr '\n' ' ' 0 plugins installed; 
+PASS  rhdh           Topology data: frontend                        1 deployment(s) visible to Developer Hub 
+PASS  rhdh           Topology data: rag-service                     2 deployment(s) visible to Developer Hub 
+PASS  rhdh           Topology data: model-router                    1 deployment(s) visible to Developer Hub 
+PASS  rhdh           Topology data: coffee-shop                     1 deployment(s) visible to Developer Hub 
+PASS  rhdh           Topology data: coffee-menu                     2 deployment(s) visible to Developer Hub 
+PASS  tssc           Trusted Artifact Signer                        Securesign rhtas Ready 
+PASS  tssc           Trusted Profile Analyzer                       https://server-trusted-profile-analyzer.apps.cluster-cfhnl.dyn.redhatworkshops.io 
+PASS  tssc           pipeline trusted-supply-chain                  pipeline, tools image, cosign key 
+PASS  tssc           last supply chain run                          coffee-menu-retest5-ql6t5 Succeeded 
+PASS  apps           frontend                                       ready 1/1 
+PASS  apps           rag-service-v1                                 ready 1/1 
+PASS  apps           rag-service-v2                                 ready 1/1 
+PASS  apps           model-router                                   ready 1/1 
+PASS  apps           orders-service                                 ready 1/1 
+PASS  apps           projection-service                             ready 1/1 
+PASS  apps           mongodb                                        ready 1/1 
+PASS  apps           coffee-shop                                    ready 1/1 
+PASS  apps           coffee-menu-v1                                 ready 1/1 
+PASS  apps           coffee-menu-v2                                 ready 1/1 
+PASS  apps           ai-demo-gateway                                ready 1/1 
+PASS  apps           demo UI                                        HTTP 200 https://ai-demo-ai-demo.apps.cluster-cfhnl.dyn.redhatworkshops.io/ 
+PASS  apps           coffee shop UI                                 HTTP 200 https://coffee-ai-demo.apps.cluster-cfhnl.dyn.redhatworkshops.io/ 
+PASS  mesh           who-can-access-who probe                       rag-service=allow orders-service=allow projection-service=allow model-router=deny mongodb=deny 
+PASS  mesh           plaintext rejected (STRICT mTLS)               present 
+PASS  coffee         menu through the mesh                          menu v1 live 
+PASS 73   WARN 0   FAIL 6

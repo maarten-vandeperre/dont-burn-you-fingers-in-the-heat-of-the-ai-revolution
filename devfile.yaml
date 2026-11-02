@@ -1,9 +1,19 @@
 # Dev Spaces workspace for this repository (open: Dev Spaces URL + /#<GitLab repository URL>).
 # Commands (Terminal > Run Task > devfile): set up commit signing with Trusted Artifact Signer,
 # sign a commit and push it (starts the trusted supply chain pipeline), verify the last commit.
+#
+# "1. Set up commit signing" also runs automatically on every workspace start (postStart below),
+# not just as a one-time manual task: commit.gpgsign and the rest of gitsign's config are *local*,
+# per-clone git settings (stack/tssc/devspaces/sign-setup.sh), so a workspace being recreated or
+# getting a fresh PVC -- not just a pod restart -- would otherwise silently go back to plain,
+# unsigned commits with no error at all. The script is idempotent and fast on an
+# already-set-up workspace, so this adds no noticeable delay to a normal start.
 schemaVersion: 2.2.0
 metadata:
   name: ocp422-ai-platform
+events:
+  postStart:
+    - setup-signing-poststart
 components:
   - name: tools
     container:
@@ -11,6 +21,12 @@ components:
       memoryLimit: 4Gi
       mountSources: true
 commands:
+  - id: setup-signing-poststart
+    exec:
+      label: "(internal) set up commit signing on workspace start"
+      component: tools
+      workingDir: ${PROJECT_SOURCE}
+      commandLine: bash stack/tssc/devspaces/sign-setup.sh > /tmp/sign-setup-poststart.log 2>&1 || true
   - id: 1-setup-signing
     exec:
       label: "1. Set up commit signing (gitsign + Trusted Artifact Signer)"

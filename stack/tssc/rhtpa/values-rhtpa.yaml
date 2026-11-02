@@ -9,7 +9,14 @@ ingress:
 
 storage:
   type: filesystem
-  size: 10Gi
+  # 20Gi, not the chart's own 10Gi default: this filesystem (ext4 on Ceph RBD) ties its *inode*
+  # budget to its byte size at mkfs time (bytes-per-inode ratio set once, at creation) -- at 10Gi
+  # it got only 640K inodes, which the CVE/GitHub-advisory importers (./deploy.sh tssc setup
+  # --tpa-importers ingests hundreds of thousands of small documents) fully exhausted well before
+  # the *byte* capacity looked full (confirmed live: `df -h` 40% used, `df -i` 100% used, uploads
+  # then fail with HTTP 500 "StorageFull"/"No space left on device"). Must match the PVC size
+  # tssc.sh's rhtpa() pre-creates (see its "Chart bug workaround" comment) -- bump both together.
+  size: 20Gi
 
 database:
   sslMode: disable

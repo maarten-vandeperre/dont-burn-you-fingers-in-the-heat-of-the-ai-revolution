@@ -1,7 +1,8 @@
 # Operators of the trusted software supply chain layer (OpenShift Pipelines, GitOps and Keycloak
-# come from the platform stack).
+# come from the platform stack). Dev Spaces' operator subscription now lives in stack/operators
+# (installed by './deploy.sh stack' with every other operator); tssc.sh's devspaces() applies that
+# same shared file directly so './deploy.sh tssc setup' still works standalone.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
   - rhtas.yaml
-  - devspaces.yaml

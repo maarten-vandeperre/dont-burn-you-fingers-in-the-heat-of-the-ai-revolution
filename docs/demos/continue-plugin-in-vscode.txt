@@ -1,0 +1,19 @@
+~/.continue/config.yaml
+
+name: Local Assistant
+version: 1.0.0
+schema: v1
+models:
+  - name: qwen3-0-6b
+    provider: openai
+    model: "qwen3-0-6b"
+    apiBase: "https://maas.apps.cluster-6qx55.dyn.redhatworkshops.io/maas-models/qwen3-0-6b/v1"
+    apiKey: ""
+context:
+  - provider: code
+  - provider: docs
+  - provider: diff
+  - provider: terminal
+  - provider: problems
+  - provider: folder
+  - provider: codebase

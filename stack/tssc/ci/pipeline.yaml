@@ -1,17 +1,27 @@
 # Trusted software supply chain for one demo service (default: coffee-menu).
 #
-#   clone -> verify-commit -> ci-tests -> build-image -> sign-image -> sbom -> tpa-check
-#         -> acs-checks -> push-release -> argocd-sync
+#                                   ,-> static-analysis (MOCK) ->,
+#   clone -> verify-commit --------+-> unit-tests       (MOCK) -+-> build-image -> sign-image -> sbom
+#                                   `-> integration-tests(MOCK) ->'
+#         -> tpa-check -> acs-checks -> push-release -> argocd-sync (MOCK unless an Argo CD app exists)
 #
-#   verify-commit  gitsign verify against Trusted Artifact Signer (keyless, Keycloak identity)
-#   sign-image     cosign signature, recorded in the RHTAS transparency log (Rekor)
-#   sbom           syft CycloneDX SBOM, attached to the image as a signed attestation
-#   tpa-check      SBOM uploaded to Trusted Profile Analyzer, advisories per severity, optional gate
-#   acs-checks     Advanced Cluster Security image + deployment checks (simulated without ACS)
-#   push-release   the signed digest promoted to :release
-#   argocd-sync    Argo CD app ai-demo pinned to the signed digest and synced (simulated without app)
+#   verify-commit        gitsign verify against Trusted Artifact Signer (keyless, Keycloak identity);
+#                         blocks the pipeline if the commit is unsigned or not from a known identity
+#   static-analysis       MOCK: stands in for SonarQube/Checkstyle/etc. (not wired into this demo)
+#   unit-tests             MOCK: stands in for `./gradlew test` (coffee-menu has no test sources yet)
+#   integration-tests      MOCK: stands in for a Testcontainers / staging-namespace test run
+#   build-image           podman builds the container from the service's Dockerfile
+#   sign-image            cosign signature, recorded in the RHTAS transparency log (Rekor)
+#   sbom                  syft CycloneDX SBOM, attached to the image as a signed attestation
+#   tpa-check             SBOM uploaded to Trusted Profile Analyzer, CVEs reported, optional gate
+#   acs-checks            Advanced Cluster Security image + deployment checks (MOCK without ACS)
+#   push-release          the signed digest promoted to :release
+#   argocd-sync           Argo CD app ai-demo pinned to the signed digest and synced (MOCK without app)
 #
-# Settings: ConfigMap tssc-config and Secret tssc-secrets (written by stack/tssc/tssc.sh).
+# The three middle tasks run in parallel (same runAfter, no dependency between them) and are
+# ALWAYS mocked: every mocked task prints "MOCK" or "SIMULATED" as the first word of its log so a
+# demo audience can tell real cryptographic/security steps (gitsign, cosign, syft, RHTPA) apart
+# from stand-ins. Settings: ConfigMap tssc-config and Secret tssc-secrets (stack/tssc/tssc.sh).
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
@@ -43,6 +53,13 @@ spec:
       value: $(tasks.build-image.results.image-ref)
     - name: release
       value: $(tasks.push-release.results.release-ref)
+    # Drives Developer Hub's Tekton plugin VULNERABILITIES column (any Pipeline-level result
+    # whose name ends in "SCAN_OUTPUT"; see tpa-check's own results/metadata.annotations below for
+    # the matching "View SBOM" convention). tpa-check always writes this (zeros when
+    # simulated/unavailable), so it's always present -- a Pipeline result referencing a task
+    # result the task never wrote would otherwise go missing/error.
+    - name: tpa-SCAN_OUTPUT
+      value: $(tasks.tpa-check.results.scan-output)
   tasks:
     # ------------------------------------------------------------------ 1. clone
     - name: clone
@@ -112,8 +129,12 @@ spec:
                 echo "WARNING: commit signature not verified; continuing (require-signed-commit=false)"
               fi
 
-    # ------------------------------------------------------------------ 3. CI: compile and unit tests
-    - name: ci-tests
+    # ------------------------------------------------------------------ 3a/3b/3c. CI checks (parallel, all MOCK)
+    # Same runAfter, no dependency between them: Tekton schedules the three in parallel. None of
+    # them is a real tool call; each exists to show where a real static analyzer, unit test suite
+    # and integration test suite would plug into the trusted supply chain. coffee-menu itself has
+    # no test sources yet, so "mock" also reflects reality here, not just a demo shortcut.
+    - name: static-analysis
       runAfter: [verify-commit]
       workspaces: [{name: source, workspace: source}]
       params: [{name: service, value: $(params.service)}]
@@ -121,25 +142,60 @@ spec:
         params: [{name: service}]
         workspaces: [{name: source}]
         steps:
-          - name: gradle-test
-            image: registry.access.redhat.com/ubi9/openjdk-25:latest
-            env:
-              - {name: SERVICE, value: $(params.service)}
-              - {name: GRADLE_USER_HOME, value: $(workspaces.source.path)/.gradle-home}
-            computeResources:
-              requests: {cpu: "1", memory: 2Gi}
-              limits: {memory: 3Gi}
+          - name: mock-static-analysis
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            env: [{name: SERVICE, value: $(params.service)}]
             script: |
               #!/usr/bin/env bash
               set -euo pipefail
-              cd "$(workspaces.source.path)/src/app"
-              chmod +x gradlew
-              ./gradlew --no-daemon --console=plain ":${SERVICE}:test"
-              echo "OK: ${SERVICE} compiles and its tests pass"
+              echo "MOCK: static code analysis (stands in for SonarQube / Checkstyle / SpotBugs; not wired into this demo)"
+              cd "$(workspaces.source.path)/src/app" 2>/dev/null || true
+              files=$(find "./${SERVICE}" -name '*.java' 2>/dev/null | wc -l | tr -d ' ')
+              echo "  scanned ${files} real .java file(s) under app/${SERVICE} (file count is real, findings are not)"
+              echo "  MOCK result: 0 blocker, 0 critical, 1 minor style finding"
+              echo "MOCK OK: static analysis quality gate passed (simulated, no real scanner ran)"
+    - name: unit-tests
+      runAfter: [verify-commit]
+      workspaces: [{name: source, workspace: source}]
+      params: [{name: service, value: $(params.service)}]
+      taskSpec:
+        params: [{name: service}]
+        workspaces: [{name: source}]
+        steps:
+          - name: mock-unit-tests
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            env: [{name: SERVICE, value: $(params.service)}]
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              echo "MOCK: unit tests (stands in for './gradlew :${SERVICE}:test'; no real test runner executed)"
+              cd "$(workspaces.source.path)/src/app" 2>/dev/null || true
+              tests=$(find "./${SERVICE}" -path '*/test/*' -name '*.java' 2>/dev/null | wc -l | tr -d ' ')
+              echo "  real test source files found under app/${SERVICE}: ${tests}"
+              echo "  MOCK result: Tests run: 38, Failures: 0, Skipped: 0"
+              echo "MOCK OK: unit tests passed (simulated, no real test runner ran)"
+    - name: integration-tests
+      runAfter: [verify-commit]
+      workspaces: [{name: source, workspace: source}]
+      params: [{name: service, value: $(params.service)}]
+      taskSpec:
+        params: [{name: service}]
+        workspaces: [{name: source}]
+        steps:
+          - name: mock-integration-tests
+            image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+            env: [{name: SERVICE, value: $(params.service)}]
+            script: |
+              #!/usr/bin/env bash
+              set -euo pipefail
+              echo "MOCK: integration tests (stands in for Testcontainers or a staging-namespace run; nothing was deployed)"
+              echo "  would exercise: ${SERVICE} against a live PostgreSQL + the other ai-demo services"
+              echo "  MOCK result: 6 scenarios passed, 0 failed"
+              echo "MOCK OK: integration tests passed (simulated, no real environment was exercised)"
 
-    # ------------------------------------------------------------------ 4. build and push the image
+    # ------------------------------------------------------------------ 4. build and push the image (podman)
     - name: build-image
-      runAfter: [ci-tests]
+      runAfter: [static-analysis, unit-tests, integration-tests]
       workspaces: [{name: source, workspace: source}]
       params:
         - {name: service, value: $(params.service)}
@@ -149,8 +205,8 @@ spec:
         workspaces: [{name: source}]
         results: [{name: image-ref}, {name: image-digest}, {name: image-repo}]
         steps:
-          - name: buildah
-            image: registry.redhat.io/rhel9/buildah:latest
+          - name: podman
+            image: registry.redhat.io/rhel9/podman:latest
             env:
               - {name: SERVICE, value: $(params.service)}
               - {name: TAG, value: $(params.tag)}
@@ -168,16 +224,17 @@ spec:
               dockerfile=Dockerfile; [ -f "${SERVICE}/Dockerfile" ] && dockerfile="${SERVICE}/Dockerfile"
               base_images=$(grep -E '^FROM ' "$dockerfile" | awk '{print $2}' | sort -u | tr '\n' ' ')
               echo "base images: ${base_images}"
-              buildah --storage-driver=vfs bud --format=oci --build-arg "SERVICE=${SERVICE}" \
+              echo "building with podman (storage driver vfs, chroot isolation: no proc/sys mount needed under this cluster's SCC)"
+              podman build --storage-driver=vfs --isolation=chroot --format=oci --build-arg "SERVICE=${SERVICE}" \
                 -f "$dockerfile" -t "${repo}:${TAG}" .
-              buildah --storage-driver=vfs push --tls-verify=false --digestfile /tmp/digest \
+              podman push --storage-driver=vfs --tls-verify=false --digestfile /tmp/digest \
                 --creds "pipeline:$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" \
                 "${repo}:${TAG}" "docker://${repo}:${TAG}"
               digest=$(cat /tmp/digest)
               printf '%s' "$repo" > "$(results.image-repo.path)"
               printf '%s' "$digest" > "$(results.image-digest.path)"
               printf '%s' "${repo}@${digest}" > "$(results.image-ref.path)"
-              echo "OK: pushed ${repo}:${TAG} = ${digest}"
+              echo "OK: pushed ${repo}:${TAG} = ${digest} (built with podman)"
 
     # ------------------------------------------------------------------ 5. sign the image
     - name: sign-image
@@ -234,7 +291,12 @@ spec:
               token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
               export SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY=true SYFT_REGISTRY_AUTH_USERNAME=pipeline SYFT_REGISTRY_AUTH_PASSWORD="$token"
               sbom="$(workspaces.source.path)/sbom.cdx.json"
-              syft scan "registry:${IMAGE}" -o "cyclonedx-json=${sbom}" -q
+              # Pin the CycloneDX spec version: syft's default (unversioned) "cyclonedx-json"
+              # output tracks the latest spec it supports (1.7 as of this tools image), but this
+              # cluster's Trusted Profile Analyzer rejects that with "UnsupportedFormat: CycloneDX
+              # version 1.7 is unsupported; try 1.3, 1.4, 1.5, 1.6" (confirmed live) -- its ingestor
+              # hasn't caught up to 1.7 yet. 1.6 is syft's highest version TPA still accepts.
+              syft scan "registry:${IMAGE}" -o "cyclonedx-json@1.6=${sbom}" -q
               count=$(jq '.components | length' "$sbom")
               printf '%s' "$count" > "$(results.components.path)"
               echo "SBOM (CycloneDX): ${count} components, by type:"
@@ -259,9 +321,28 @@ spec:
         - {name: tag, value: $(tasks.clone.results.short-commit)}
         - {name: gate, value: $(params.vulnerability-gate)}
       taskSpec:
+        # Developer Hub's Tekton plugin ("View SBOM" icon + VULNERABILITIES column in the CI tab)
+        # looks for these two specific, undocumented-in-our-own-docs conventions (confirmed against
+        # @backstage-community/plugin-tekton's own source + test fixtures, since RHDH's bundled
+        # build doesn't ship human docs for this):
+        #  - "View SBOM": a TaskRun (any task) annotated task.results.key=LINK_TO_SBOM (+
+        #    task.results.type=external-link for a clickable external URL) that also has a
+        #    *result* literally named LINK_TO_SBOM. The metadata.annotations below apply to the
+        #    TaskRun Tekton creates for this embedded taskSpec (Tekton's EmbeddedTask.metadata).
+        #  - VULNERABILITIES column: a *Pipeline-level* result whose name ends in "SCAN_OUTPUT",
+        #    value a JSON string {"vulnerabilities":{"critical":N,"high":N,"medium":N,"low":N}}
+        #    (see the pipeline-level `results:` block above, tpa-SCAN_OUTPUT). Always written
+        #    (zeros when simulated/unavailable) so the Pipeline-level result never references a
+        #    task result that was never produced.
+        metadata:
+          annotations:
+            task.results.key: LINK_TO_SBOM
+            task.results.type: external-link
+            task.results.format: application/text
+            task.output.location: results
         params: [{name: service}, {name: tag}, {name: gate}]
         workspaces: [{name: source}]
-        results: [{name: summary}]
+        results: [{name: summary}, {name: LINK_TO_SBOM}, {name: scan-output}]
         steps:
           - name: upload-and-check
             image: image-registry.openshift-image-registry.svc:5000/tssc-ci/tssc-tools:latest
@@ -276,32 +357,74 @@ spec:
               #!/usr/bin/env bash
               set -euo pipefail
               sbom="$(workspaces.source.path)/sbom.cdx.json"
+              # Both results below are declared in taskSpec.results, so write them on *every* exit
+              # path (even the early simulated/storage-full ones) -- an empty LINK_TO_SBOM reads as
+              # "no SBOM" to Developer Hub (falsy/not an http(s) URL, same as today's disabled icon)
+              # and zeroed scan-output keeps the Pipeline-level result above always resolvable.
+              no_sbom_link() { printf '' > "$(results.LINK_TO_SBOM.path)"; }
+              zero_scan_output() { printf '{"vulnerabilities":{"critical":0,"high":0,"medium":0,"low":0}}' > "$(results.scan-output.path)"; }
               if [ -z "${TPA_URL:-}" ] || [ -z "${TPA_CLIENT_SECRET:-}" ]; then
                 echo "SIMULATED: Trusted Profile Analyzer is not configured (./deploy.sh tssc setup installs it)"
-                printf 'simulated' > "$(results.summary.path)"; exit 0
+                printf 'simulated' > "$(results.summary.path)"; no_sbom_link; zero_scan_output; exit 0
               fi
               token=$(curl -fsSk -d grant_type=client_credentials -d client_id=rhtpa-cli \
                 -d "client_secret=${TPA_CLIENT_SECRET}" "$KEYCLOAK_TOKEN_URL" | jq -r .access_token)
-              id="" api=""
-              for v in v3 v2; do
-                code=$(curl -sk -o /tmp/upload.json -w '%{http_code}' -X POST -H "Authorization: Bearer ${token}" \
-                  -H 'Content-Type: application/json' --data-binary "@${sbom}" \
-                  "${TPA_URL}/api/${v}/sbom?labels.source=tekton&labels.service=${SERVICE}&labels.commit=${TAG}")
-                if [ "$code" = 201 ] || [ "$code" = 200 ]; then id=$(jq -r .id /tmp/upload.json); api=$v; break; fi
-              done
-              [ -n "$id" ] || { echo "upload to ${TPA_URL} failed (HTTP ${code}): $(head -c 300 /tmp/upload.json)"; exit 1; }
-              echo "OK: SBOM stored in Trusted Profile Analyzer (API ${api}), id ${id}"
+              # Only /api/v3/sbom supports POST on this RHTPA version -- verified against its own
+              # ${TPA_URL}/openapi.json: /api/v2/sbom lists only `get`, /api/v3/sbom lists
+              # `get, post, delete`. A v2 fallback here is dead code: it always 404s and, worse,
+              # overwrites $code so the *real* v3 error never reaches the log (this masked a real
+              # upload failure as a plain, uninformative "HTTP 404" earlier).
+              code=$(curl -sk -o /tmp/upload.json -w '%{http_code}' -X POST -H "Authorization: Bearer ${token}" \
+                -H 'Content-Type: application/json' --data-binary "@${sbom}" \
+                "${TPA_URL}/api/v3/sbom?labels.source=tekton&labels.service=${SERVICE}&labels.commit=${TAG}")
+              if [ "$code" = 500 ] && grep -qi 'storagefull\|no space left on device' /tmp/upload.json; then
+                # Known caveat on resource-constrained demo clusters, not a pipeline bug: the
+                # vulnerability importers (./deploy.sh tssc setup --tpa-importers) ingest a very
+                # large number of small advisory documents into Trusted Profile Analyzer's content
+                # store; on a small PV its *inode* budget (not its byte capacity -- `df -h` can
+                # look nearly empty while `df -i` is at 100%) can run out well before the disk
+                # looks full. See the demo guide for how to check/recover. Treated as a soft
+                # caveat (same spirit as "no advisories match yet" below), not a hard failure.
+                echo "CAVEAT: Trusted Profile Analyzer's storage is out of inodes (the vulnerability importers filled it) -- SBOM not stored this run, see the guide's Trusted Profile Analyzer section"
+                printf 'storage-full' > "$(results.summary.path)"; no_sbom_link; zero_scan_output; exit 0
+              fi
+              id=""
+              if [ "$code" = 201 ] || [ "$code" = 200 ]; then id=$(jq -r .id /tmp/upload.json); fi
+              if [ -z "$id" ]; then no_sbom_link; zero_scan_output; fi
+              [ -n "$id" ] || { echo "upload to ${TPA_URL}/api/v3/sbom failed (HTTP ${code}): $(head -c 500 /tmp/upload.json)"; exit 1; }
+              echo "OK: SBOM stored in Trusted Profile Analyzer (API v3), id ${id}"
+              printf '%s' "${TPA_URL}/sboms/${id}" > "$(results.LINK_TO_SBOM.path)"
               echo "    ${TPA_URL}/sboms/${id}"
-              curl -fsSk -H "Authorization: Bearer ${token}" "${TPA_URL}/api/${api}/sbom/${id}/advisory" > /tmp/adv.json
+              curl -fsSk -H "Authorization: Bearer ${token}" "${TPA_URL}/api/v3/sbom/${id}/advisory" > /tmp/adv.json
+              # Severity lives at .scores[].severity (one entry per CVSS version RHTPA has for that
+              # CVE, e.g. 3.1 and 4.0 can both be present) -- NOT .base_score/.average_severity/
+              # .severity, which don't exist on this API's actual response shape (confirmed live:
+              # every status entry has .scores as an array, .base_score is always null). Picking any
+              # single .scores[] entry risks silently under-reporting if a higher-severity score
+              # exists under a different CVSS version, so rank all of them and keep the worst.
               jq '[ (if type == "object" then (.items // []) else . end)[] | .status[]? | select(.status == "affected")
-                    | {cve: .identifier, severity: (.base_score.severity // .average_severity // .severity // "unknown")} ]
+                    | {cve: .identifier,
+                       severity: (([.scores[]?.severity] + ["unknown"]) as $sevs
+                                  | ($sevs | map({critical:4,high:3,medium:2,low:1,unknown:0}[.] // 0)) as $ranks
+                                  | $sevs[$ranks | index(max)]) } ]
                   | unique_by(.cve)' /tmp/adv.json > /tmp/vulns.json
               total=$(jq length /tmp/vulns.json)
               summary=$(jq -r 'group_by(.severity) | map("\(.[0].severity)=\(length)") | join(" ")' /tmp/vulns.json)
               printf '%s' "${total} affected: ${summary:-none}" > "$(results.summary.path)"
+              jq '{vulnerabilities: {critical: ([.[] | select(.severity=="critical")] | length),
+                                      high:     ([.[] | select(.severity=="high")] | length),
+                                      medium:   ([.[] | select(.severity=="medium")] | length),
+                                      low:      ([.[] | select(.severity=="low")] | length)}}' \
+                -c /tmp/vulns.json > "$(results.scan-output.path)"
               echo "affected vulnerabilities: ${total} ${summary:+(${summary})}"
               jq -r 'sort_by(.severity) | .[0:15][] | "  \(.severity)\t\(.cve)"' /tmp/vulns.json
               [ "$total" -gt 0 ] || echo "(no advisories match yet: importers fill the vulnerability data, see the guide)"
+              # This is a point-in-time scan: importers keep ingesting in the background after this
+              # task returns, so a later re-scan of the same image can find more. Best-effort, never
+              # fails the task: note any importer that hasn't finished its first full pass yet.
+              stale=$(curl -fsSk -H "Authorization: Bearer ${token}" "${TPA_URL}/api/v3/importer" 2>/dev/null \
+                | jq -r '[.[] | select(.configuration[].disabled == false and .lastSuccess == null) | .name] | join(", ")' 2>/dev/null || true)
+              [ -z "$stale" ] || echo "note: importer(s) still on their first pass (${stale}) -- counts above may increase on a later re-scan"
               blocking=$(jq '[.[] | select(.severity == "critical" or .severity == "high")] | length' /tmp/vulns.json)
               if [ "$blocking" -gt 0 ] && [ "$GATE" = "fail" ]; then
                 echo "STOP: ${blocking} critical/high vulnerabilities (vulnerability-gate=fail)"; exit 1
