@@ -21,7 +21,9 @@ export interface CustomerView {
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) } });
   if (!res.ok) {
-    const text = await res.text();
+    const text = (await res.text()).trim();
+    const duplicate = text.match(/Duplicate email:\s*\S+/);
+    if (duplicate) throw new Error(duplicate[0]);
     throw new Error(`${res.status} ${res.statusText}${text ? `: ${text.slice(0, 300)}` : ""}`);
   }
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);

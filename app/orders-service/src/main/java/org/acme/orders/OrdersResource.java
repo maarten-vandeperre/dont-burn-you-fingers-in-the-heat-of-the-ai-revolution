@@ -12,6 +12,7 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.WebApplicationException;
+import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
@@ -45,13 +46,17 @@ public class OrdersResource {
         if (input == null || blank(input.firstName()) || blank(input.lastName()) || blank(input.email())) {
             throw new WebApplicationException("firstName, lastName and email are required", Response.Status.BAD_REQUEST);
         }
-        if (Customer.count("email", input.email()) > 0) {
-            throw new WebApplicationException("email already exists", Response.Status.CONFLICT);
+        String email = input.email().strip().toLowerCase();
+        if (Customer.count("email", email) > 0) {
+            throw new WebApplicationException(Response.status(Response.Status.CONFLICT)
+                    .type(MediaType.TEXT_PLAIN)
+                    .entity("Duplicate email: " + email)
+                    .build());
         }
         Customer c = new Customer();
         c.firstName = input.firstName().strip();
         c.lastName = input.lastName().strip();
-        c.email = input.email().strip().toLowerCase();
+        c.email = email;
         c.persist();
         written("customers", "insert");
         LOG.infof("customer %d created", c.id);
