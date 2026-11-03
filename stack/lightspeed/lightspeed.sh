@@ -6,7 +6,7 @@
 #   ./deploy.sh lightspeed llm          only (re)create the LLM wiring: MaaS subscription, API key,
 #                                       Secret lightspeed-secrets (--rotate: always mint a new key)
 #   ./deploy.sh lightspeed mcp          only (re)deploy platform-mcp (after changing server.py)
-#   ./deploy.sh lightspeed test         end-to-end checks: MCP endpoints, tools, and five questions
+#   ./deploy.sh lightspeed test         end-to-end checks: MCP endpoints, tools, and six questions
 #                                       through Lightspeed Core (the same path the chat UI uses)
 #   ./deploy.sh lightspeed ask "<question>" [model]
 #                                       one question through Lightspeed Core, prints the tool calls
@@ -20,9 +20,11 @@
 #      dynamic-plugins-registry-auth volume) and a MaaS gateway whose Kuadrant wasm plugin did not
 #      load after a cluster restart (every MaaS call answers 503 "wasm_fail_stream").
 #   2. LLM: Developer Lightspeed becomes a MaaS tenant: ServiceAccount rhdh/developer-lightspeed,
-#      MaaSSubscription developer-lightspeed (200k tokens/min on Qwen3-0.6B), an API key minted with
-#      that identity, Secret rhdh/lightspeed-secrets (ENABLE_VLLM, VLLM_URL, VLLM_API_KEY, ...).
-#      OPENAI_API_KEY (exported before running setup/llm) adds the OpenAI models to the picker.
+#      MaaSSubscription developer-lightspeed (200k tokens/min on EVERY model served through MaaS),
+#      ONE API key minted with that identity, Secret rhdh/lightspeed-secrets (ENABLE_VLLM, VLLM_URL,
+#      VLLM_API_KEY, ...) for the default model, and ConfigMap lightspeed-llama-stack-config: one
+#      extra Llama Stack provider vllm-<model> per other model, with that same key. All of them show
+#      up in the model picker of the chat. OPENAI_API_KEY (exported before setup/llm) adds OpenAI.
 #   3. MCP: Developer Hub's MCP endpoint (mcp-actions-backend + software-catalog-mcp-extras plugins,
 #      static MCP_TOKEN) and platform-mcp (stack/lightspeed/mcp-server): deployed models, catalog
 #      overview and relations, CI/CD/runtime status per component.
@@ -34,7 +36,9 @@
 # OpenShift AI + MaaS with qwen3-0-6b). Demo guide: docs/demos/13-developer-lightspeed.md
 #
 # Environment
-#   LIGHTSPEED_MODEL   MaaS model Lightspeed talks to (default qwen3-0-6b; must support tool calls)
+#   LIGHTSPEED_MODEL   default MaaS model of Lightspeed (default qwen3-0-6b; must support tool calls)
+#   LIGHTSPEED_MODELS  MaaS models offered in the model picker, comma separated (default: every
+#                      Ready MaaSModelRef in maas-models, i.e. every model served in OpenShift AI)
 #   OPENAI_API_KEY     optional: also offer OpenAI models (gpt-4o-mini, ...) in the model picker
 # =============================================================================
 set -Eeuo pipefail
@@ -47,6 +51,7 @@ CR=developer-hub
 DEPLOY=backstage-developer-hub
 MODEL="${LIGHTSPEED_MODEL:-qwen3-0-6b}"
 MODELS_NS=maas-models
+MODELS=()   # all models Lightspeed offers, default model first (resolve_models)
 SUB=developer-lightspeed
 LS_SA=developer-lightspeed
 ROTATE=false
@@ -140,20 +145,53 @@ ensure_mcp_token() {
 }
 
 # ----------------------------------------------------------------------------- LLM (MaaS)
-key_works() {  # key_works <key>: the key can call the model (GET /v1/models of the model path)
+key_works() {  # key_works <key> [model]: the key can call the model (GET /v1/models of the model path)
   [[ -n "$1" ]] || return 1
   [[ "$(curl -sk -o /dev/null -w '%{http_code}' --max-time 20 -H "Authorization: Bearer $1" \
-        "https://$(maas_host)/${MODELS_NS}/${MODEL}/v1/models")" == "200" ]]
+        "https://$(maas_host)/${MODELS_NS}/${2:-$MODEL}/v1/models")" == "200" ]]
+}
+
+# Every model served through MaaS (Ready MaaSModelRef), or LIGHTSPEED_MODELS; default model first
+resolve_models() {
+  local list m
+  if [[ -n "${LIGHTSPEED_MODELS:-}" ]]; then list=$(tr ', ' '\n\n' <<<"$LIGHTSPEED_MODELS")
+  else list=$(oc get maasmodelrefs -n "$MODELS_NS" -o json 2>/dev/null \
+               | jq -r '.items[] | select(.status.phase == "Ready") | .metadata.name'); fi
+  MODELS=("$MODEL")
+  for m in $list; do [[ -n "$m" && "$m" != "$MODEL" ]] && MODELS+=("$m"); done
+  return 0
+}
+
+# Llama Stack config of the sidecar: the operator default (git) + one vllm-<model> provider per
+# extra model, inserted at the @maas-models@ marker. Same key and limits as the default provider.
+render_llama_stack_config() {  # render_llama_stack_config <out-file>
+  local providers="" m
+  for m in "${MODELS[@]:1}"; do
+    providers+="    - provider_id: vllm-${m}
+      provider_type: remote::vllm
+      config:
+        base_url: https://$(maas_host)/${MODELS_NS}/${m}/v1
+        api_token: \${env.VLLM_API_KEY:=}
+        max_tokens: \${env.VLLM_MAX_TOKENS:=4096}
+        network:
+          tls:
+            verify: \${env.VLLM_TLS_VERIFY:=true}
+"
+  done
+  PROVIDERS="$providers" awk '/# @maas-models@/ {print; printf "%s", ENVIRON["PROVIDERS"]; next} {print}' \
+    "${RHDH_DIR}/lightspeed/llama-stack-config.yaml" > "$1"
 }
 
 setup_llm() {
-  step "LLM: Developer Lightspeed as a MaaS tenant (model ${MODEL})"
+  resolve_models
+  step "LLM: Developer Lightspeed as a MaaS tenant (default ${MODEL}, models: ${MODELS[*]})"
   heal_maas_gateway
   oc apply -f "${LS_DIR}/maas/subscription.yaml" >/dev/null
-  if [[ "$MODEL" != "qwen3-0-6b" ]]; then
-    oc patch maassubscription "$SUB" -n models-as-a-service --type=json \
-      -p "[{\"op\":\"replace\",\"path\":\"/spec/modelRefs/0/name\",\"value\":\"${MODEL}\"}]" >/dev/null
-  fi
+  # one subscription (so one API key) for all models, same token budget per model
+  local refs
+  refs=$(printf '%s\n' "${MODELS[@]}" | jq -R . | jq -sc --arg ns "$MODELS_NS" \
+         'map({name: ., namespace: $ns, tokenRateLimits: [{limit: 200000, window: "1m"}]})')
+  oc patch maassubscription "$SUB" -n models-as-a-service --type=merge -p "{\"spec\":{\"modelRefs\":${refs}}}" >/dev/null
   wait_until 120 "MaaSSubscription ${SUB} active" bash -c \
     "[[ \"\$(oc get maassubscription ${SUB} -n models-as-a-service -o jsonpath='{.status.phase}')\" == Active ]]" || true
 
@@ -183,6 +221,13 @@ setup_llm() {
   oc create secret generic lightspeed-secrets -n "$NS" "${args[@]}" --dry-run=client -o yaml \
     | oc apply --server-side --force-conflicts --field-manager=lightspeed -f - >/dev/null
   ok "Secret ${NS}/lightspeed-secrets: vLLM provider -> https://$(maas_host)/${MODELS_NS}/${MODEL}/v1$([[ -n "$openai" ]] && echo ', OpenAI provider enabled' || echo ' (no OPENAI_API_KEY: MaaS only)')"
+
+  local m
+  for m in "${MODELS[@]:1}"; do
+    # a brand-new modelRef can take a few seconds to reach the gateway's auth policy
+    wait_until 60 "the same API key works for ${m} (provider vllm-${m})" key_works "$key" "$m" \
+      || warn "the key is not (yet) accepted for ${m}: it stays in the picker, but answers fail until it is"
+  done
 }
 
 # ----------------------------------------------------------------------------- MCP server
@@ -205,7 +250,8 @@ ensure_dynamic_plugins() {
   local cm file name pkg added=0
   file=$(mktemp)
   oc get cm dynamic-plugins-rhdh -n "$NS" -o jsonpath='{.data.dynamic-plugins\.yaml}' > "$file"
-  for name in backstage-plugin-mcp-actions-backend red-hat-developer-hub-backstage-plugin-software-catalog-mcp-extras; do
+  for name in backstage-plugin-mcp-actions-backend red-hat-developer-hub-backstage-plugin-software-catalog-mcp-extras \
+              red-hat-developer-hub-backstage-plugin-techdocs-mcp-extras red-hat-developer-hub-backstage-plugin-scaffolder-mcp-extras; do
     if grep -q "$name" "$file"; then ok "plugin ${name} already enabled"; continue; fi
     pkg=$(extension_package "$name")
     [[ -n "$pkg" ]] || die "plugin ${name} is not offered by this Developer Hub (./deploy.sh rhdh-plugins mcp)"
@@ -229,16 +275,17 @@ patch_backstage_cr() {
     .appConfig.configMaps = ((.appConfig.configMaps // []) | if any(.name == "app-config-lightspeed") then . else . + [{"name":"app-config-lightspeed"}] end)
     | .extraEnvs.secrets = ((.extraEnvs.secrets // []) | if any(.name == "lightspeed-secrets") then . else . + [{"name":"lightspeed-secrets","containers":["lightspeed-core"]}] end)
     | .extraFiles.configMaps = ((.extraFiles.configMaps // []) | if any(.name == "lightspeed-stack-config") then . else . + [{"name":"lightspeed-stack-config","key":"lightspeed-stack.yaml","mountPath":"/app-root","containers":["lightspeed-core"]}] end)
+    | .extraFiles.configMaps = (.extraFiles.configMaps | if any(.name == "lightspeed-llama-stack-config") then . else . + [{"name":"lightspeed-llama-stack-config","key":"config.yaml","mountPath":"/app-root","containers":["lightspeed-core"]}] end)
   ' <<<"$spec")
   if [[ "$(jq -S . <<<"$spec")" == "$(jq -S . <<<"$new")" ]]; then
     ok "Backstage CR already wired for Lightspeed"; return 1
   fi
   oc patch backstage "$CR" -n "$NS" --type=merge -p "{\"spec\":{\"application\":${new}}}" >/dev/null
-  ok "Backstage CR: app-config-lightspeed, lightspeed-secrets and lightspeed-stack-config -> lightspeed-core"
+  ok "Backstage CR: app-config-lightspeed, lightspeed-secrets, lightspeed-stack-config and lightspeed-llama-stack-config -> lightspeed-core"
 }
 
 rhdh_config_hash() {
-  oc get cm app-config-lightspeed lightspeed-stack-config dynamic-plugins-rhdh -n "$NS" -o json \
+  oc get cm app-config-lightspeed lightspeed-stack-config lightspeed-llama-stack-config dynamic-plugins-rhdh -n "$NS" -o json \
     | jq -c '[.items[].data]' | cksum | cut -d' ' -f1
   secret_value "$NS" lightspeed-secrets VLLM_URL | cksum | cut -d' ' -f1
 }
@@ -275,6 +322,13 @@ setup_rhdh() {
   oc create cm lightspeed-stack-config -n "$NS" --from-file=lightspeed-stack.yaml="${RHDH_DIR}/lightspeed/lightspeed-stack.yaml" \
     --dry-run=client -o yaml | oc apply --server-side --force-conflicts --field-manager=maas-stack -f - >/dev/null \
     && ok "ConfigMap lightspeed-stack-config (Lightspeed Core: MCP servers mcp-integration-tools + platform-tools)"
+  [[ ${#MODELS[@]} -gt 0 ]] || resolve_models
+  local llama; llama=$(mktemp)
+  render_llama_stack_config "$llama"
+  oc create cm lightspeed-llama-stack-config -n "$NS" --from-file=config.yaml="$llama" \
+    --dry-run=client -o yaml | oc apply --server-side --force-conflicts --field-manager=maas-stack -f - >/dev/null \
+    && ok "ConfigMap lightspeed-llama-stack-config (Llama Stack providers: vllm -> ${MODEL}$(for m in "${MODELS[@]:1}"; do printf ', vllm-%s' "$m"; done))"
+  rm -f "$llama"
   ensure_dynamic_plugins
   after=$(rhdh_config_hash)
   if patch_backstage_cr; then changed=true; fi   # the operator rolls out on a CR change
@@ -379,7 +433,8 @@ ask() {  # ask <question> [model]
                  jq -r '.tool_calls[]?.name | select(. != "?" and . != "" and (startswith("software-catalog") or startswith("query")))' <<<"$out"; } \
                | awk 'NF && !seen[$0]++' | paste -sd, -)
   info "MCP tools called: ${LAST_TOOLS:-none}"
-  echo "    ${G}A:${N} (Qwen3 reasoning <think>...</think> omitted here; the chat UI shows it as a collapsible section)"
+  if [[ "$id" == *qwen3* ]]; then echo "    ${G}A:${N} (Qwen3 reasoning <think>...</think> omitted here; the chat UI shows it as a collapsible section)"
+  else echo "    ${G}A:${N}"; fi
   [[ -n "$(jq -r '.response // empty' <<<"$out" 2>/dev/null)" ]] || { warn "empty answer"; return 1; }
   jq -r '.response' <<<"$out" | perl -0pe 's/<think>.*?<\/think>\s*//gs' | sed '/^[[:space:]]*$/N;/^\n$/D' | sed 's/^/    | /'
 }
@@ -394,10 +449,13 @@ test_all() {
   preflight
   local fails=0 out
   step "MCP endpoints"
-  out=$(mcp_call http://localhost:7007/api/mcp-actions/v1 '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | sed -n 's/^data: //;/^{/{p;q;}')
-  if jq -e '.result.tools | length > 0' <<<"$out" >/dev/null 2>&1; then
-    ok "Developer Hub MCP (mcp-integration-tools): $(jq -r '[.result.tools[].name] | join(", ")' <<<"$out")"
-  else warn "Developer Hub MCP endpoint: ${out:0:300}"; fails=$((fails + 1)); fi
+  local srv
+  for srv in lightspeed backstage; do
+    out=$(mcp_call "http://localhost:7007/api/mcp-actions/v1/${srv}" '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | sed -n 's/^data: //;/^{/{p;q;}')
+    if jq -e '.result.tools | length > 0' <<<"$out" >/dev/null 2>&1; then
+      ok "Developer Hub MCP /v1/${srv}$([[ $srv == lightspeed ]] && echo ' (mcp-integration-tools)' || echo ' (IDE agents)'): $(jq -r '.result.tools | "\(length) tools: \([.[].name] | join(", "))"' <<<"$out")"
+    else warn "Developer Hub MCP endpoint /v1/${srv}: ${out:0:300}"; fails=$((fails + 1)); fi
+  done
   out=$(mcp_call http://platform-mcp.${NS}.svc:8080/mcp '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
   if jq -e '.result.tools | length > 0' <<<"$out" >/dev/null 2>&1; then
     ok "platform-mcp (platform-tools): $(jq -r '[.result.tools[].name] | join(", ")' <<<"$out")"
@@ -407,8 +465,14 @@ test_all() {
   out=$(mcp_call http://platform-mcp.${NS}.svc:8080/mcp '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_component_details","arguments":{"name":"coffee-shop"}}}')
   jq -e '.result.isError == false' <<<"$out" >/dev/null 2>&1 && ok "tool get_component_details works (catalog API + cluster)" || { warn "get_component_details: ${out:0:300}"; fails=$((fails + 1)); }
 
-  step "Lightspeed Core: models"
-  info "$(lcs_models | jq -r '[.models[] | select(.model_type == "llm") | "\(.provider_id)/\(.provider_resource_id // .identifier)"] | join(", ")')"
+  step "Lightspeed Core: models (one MaaS API key, every model of subscription ${SUB})"
+  local listed m
+  listed=$(lcs_models | jq -r '[.models[] | select(.model_type == "llm") | "\(.provider_id)/\(.provider_resource_id // .identifier)"] | join(", ")')
+  info "$listed"
+  for m in $(oc get maassubscription "$SUB" -n models-as-a-service -o jsonpath='{.spec.modelRefs[*].name}' 2>/dev/null); do
+    if [[ ", ${listed}," == *"/${m},"* ]]; then ok "model picker offers ${m}"
+    else warn "Lightspeed Core does not list ${m} (oc logs -n ${NS} deploy/${DEPLOY} -c lightspeed-core | grep -i ${m})"; fails=$((fails + 1)); fi
+  done
 
   step "Questions through Lightspeed Core (same request as the chat UI; Qwen3 on CPU: ~30-90 s each)"
   local q expect
@@ -422,7 +486,8 @@ test_all() {
 list_deployed_models|Which models are deployed in OpenShift AI?
 get_catalog_overview|Give me an overview of the software catalog and how the components relate to each other.
 get_component_details|What is linked to the coffee-shop component and what is its CI status?
-get_catalog_ci_status|Which items are in the catalog and what is their pipeline status? If no pipeline, say N/A.
+get_ci_status|Which items are in the catalog and what is their pipeline status? If no pipeline, say N/A.
+get_ci_status|How are my CI statuses?
 get_ci_status|What is the CI status of coffee-shop? Give me the links.
 QUESTIONS
   [[ "$fails" == 0 ]] && ok "all Lightspeed checks passed" || die "${fails} check(s) failed"
@@ -436,16 +501,17 @@ status() {
   info "Developer Hub pod : $(oc get pods -n "$NS" -l rhdh.redhat.com/app=backstage-developer-hub --no-headers 2>/dev/null | awk '{print $1" "$2" "$3}' | tr '\n' ' ')"
   info "lightspeed-core   : $(oc get deploy "$DEPLOY" -n "$NS" -o json | jq -r '[.spec.template.spec.containers[].name] | join(", ")')"
   info "LLM secret        : $(secret_value "$NS" lightspeed-secrets VLLM_URL || true) $([[ -n "$(secret_value "$NS" lightspeed-secrets ENABLE_OPENAI)" ]] && echo '+ OpenAI')"
-  info "MaaS subscription : $(oc get maassubscription "$SUB" -n models-as-a-service -o jsonpath='{.status.phase}' 2>/dev/null || echo missing)"
+  info "MaaS subscription : $(oc get maassubscription "$SUB" -n models-as-a-service -o jsonpath='{.status.phase} ({.spec.modelRefs[*].name})' 2>/dev/null || echo missing)"
   info "platform-mcp      : $(oc get deploy platform-mcp -n "$NS" -o jsonpath='{.status.readyReplicas}/{.spec.replicas} ready' 2>/dev/null || echo 'not deployed')"
-  info "MCP plugins       : $(oc get cm dynamic-plugins-rhdh -n "$NS" -o jsonpath='{.data.dynamic-plugins\.yaml}' | grep -oE '(mcp-actions-backend|software-catalog-mcp-extras)' | sort -u | tr '\n' ' ')"
+  info "MCP plugins       : $(oc get cm dynamic-plugins-rhdh -n "$NS" -o jsonpath='{.data.dynamic-plugins\.yaml}' | grep -oE '(mcp-actions-backend|[a-z-]+-mcp-extras)' | sort -u | tr '\n' ' ')"
   info "LCS models        : $(lcs_models 2>/dev/null | jq -r '[.models[] | select(.model_type == "llm") | "\(.provider_id)/\(.provider_resource_id // .identifier)"] | join(", ")' || echo 'lightspeed-core not reachable')"
 }
 
 urls() {
   step "Developer Lightspeed"
   info "Chat              : https://$(rhdh_host)/lightspeed   (or the Lightspeed button, bottom right)"
-  info "MCP endpoint      : https://$(rhdh_host)/api/mcp-actions/v1   (Bearer MCP_TOKEN, for Cursor / Claude / VS Code)"
+  info "MCP endpoint      : https://$(rhdh_host)/api/mcp-actions/v1/backstage   (all tools; Bearer MCP_TOKEN, for Cursor / Claude / VS Code)"
+  info "                    https://$(rhdh_host)/api/mcp-actions/v1/lightspeed  (catalog query only, what Lightspeed uses)"
   info "MCP token         : oc get secret rhdh-secrets -n ${NS} -o jsonpath='{.data.MCP_TOKEN}' | base64 -d"
   info "Token usage       : ./deploy.sh usage   (subscription ${SUB})"
 }
@@ -458,9 +524,9 @@ destroy() {
   spec=$(oc get backstage "$CR" -n "$NS" -o json | jq '.spec.application
     | .appConfig.configMaps |= map(select(.name != "app-config-lightspeed"))
     | .extraEnvs.secrets |= map(select(.name != "lightspeed-secrets"))
-    | .extraFiles.configMaps |= map(select(.name != "lightspeed-stack-config"))')
+    | .extraFiles.configMaps |= map(select(.name != "lightspeed-stack-config" and .name != "lightspeed-llama-stack-config"))')
   oc patch backstage "$CR" -n "$NS" --type=merge -p "{\"spec\":{\"application\":${spec}}}" >/dev/null && ok "Backstage CR unwired"
-  oc delete cm app-config-lightspeed lightspeed-stack-config -n "$NS" --ignore-not-found >/dev/null
+  oc delete cm app-config-lightspeed lightspeed-stack-config lightspeed-llama-stack-config -n "$NS" --ignore-not-found >/dev/null
   oc delete secret lightspeed-secrets -n "$NS" --ignore-not-found >/dev/null
   oc delete -f "${LS_DIR}/maas/subscription.yaml" --ignore-not-found >/dev/null && ok "MaaS subscription + ServiceAccount removed (its API keys stop working)"
   info "The MCP plugins stay in dynamic-plugins-rhdh (harmless); ./deploy.sh rhdh regenerates that file."

@@ -216,6 +216,8 @@ rhtpa() {
   oc apply -f "${TSSC_DIR}/rhtpa/postgres.yaml" >/dev/null
   wait_until 300 "RHTPA database" oc rollout status deploy/rhtpa-db -n "$TPA_NS" --timeout=10s && ok "PostgreSQL rhtpa-db"
 
+  # importer_flags can stay empty: expand it as ${importer_flags[@]+"${importer_flags[@]}"}, since
+  # macOS's bash 3.2 treats "${empty[@]}" as an unbound variable under set -u.
   local values importer_flags=()
   values=$(mktemp); sed "s#__ISSUER__#${OIDC_ISSUER}#g" "${TSSC_DIR}/rhtpa/values-rhtpa.yaml" > "$values"
   if [[ "$TPA_IMPORTERS" == true ]]; then
@@ -311,7 +313,7 @@ EOF
   # above observed hook-Job durations (seconds to low single-digit minutes once scheduling works).
   helm upgrade --install redhat-trusted-profile-analyzer openshift-helm-charts/redhat-trusted-profile-analyzer \
     -n "$TPA_NS" --values "$values" --values "${TSSC_DIR}/rhtpa/values-importers.yaml" \
-    --set-string appDomain="-${TPA_NS}.${d}" "${importer_flags[@]}" --timeout 15m >/dev/null
+    --set-string appDomain="-${TPA_NS}.${d}" ${importer_flags[@]+"${importer_flags[@]}"} --timeout 15m >/dev/null
   rm -f "$values"
   ok "helm release redhat-trusted-profile-analyzer"
   wait_until 900 "RHTPA server route" tpa_route || true

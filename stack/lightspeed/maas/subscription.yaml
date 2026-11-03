@@ -3,6 +3,9 @@
 # that identity's token) and its own token budget. Every Lightspeed question shows up in
 # `./deploy.sh usage` under subscription "developer-lightspeed".
 #
+# One subscription = one API key for ALL models: lightspeed.sh sets modelRefs to every model served
+# through MaaS (or LIGHTSPEED_MODELS), the list below is what this repo deploys.
+#
 # Why not the free tier: one Lightspeed turn = system prompt + MCP tool definitions + tool
 # results, sent twice (tool call, then answer) => ~5-8k tokens. The free tier allows 5k/min.
 apiVersion: v1
@@ -26,6 +29,11 @@ spec:
       - system:serviceaccount:rhdh:developer-lightspeed
   modelRefs:
     - name: qwen3-0-6b
+      namespace: maas-models
+      tokenRateLimits:
+        - limit: 200000
+          window: 1m
+    - name: gemma-3-270m-it
       namespace: maas-models
       tokenRateLimits:
         - limit: 200000

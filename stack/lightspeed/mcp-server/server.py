@@ -269,7 +269,7 @@ def tool_get_catalog_overview(_args):
     out.append("")
     # Small models sometimes pick this tool for "which items ... and their pipeline status": say what to do next
     out.append("This overview has NO pipeline / CI status. If the user asked about pipelines, CI or builds, "
-               "call get_catalog_ci_status now (no arguments) and answer with its table.")
+               "call get_ci_status now without a name and answer with its table.")
     return "\n".join(out)
 
 
@@ -519,12 +519,15 @@ def tool_get_catalog_ci_status(_args):
 def tool_get_ci_status(args):
     """CI status of ONE catalog item, with the links to its catalog page and its CI tab."""
     name = str(args.get("name") or args.get("component") or "").strip()
-    if not name:
-        return "Please give the name of a catalog item, e.g. coffee-shop."
+    # No name, or a word meaning "everything" (small models fill in something): all items
+    if norm(name) in ("", "all", "allitems", "catalog", "everything", "my", "mine", "myitems", "mycomponents",
+                      "components", "items", "projects", "myprojects", "none", "null", "any"):
+        return tool_get_catalog_ci_status({})
     e, near = find_entity(name)
     if not e:
-        hint = f" Did you mean: {', '.join(sorted(set(near))[:8])}?" if near else " Use get_catalog_ci_status to list the items."
-        return f"No catalog item named '{name}'.{hint}"
+        if near:
+            return f"No catalog item named '{name}'. Did you mean: {', '.join(sorted(set(near))[:8])}?"
+        return f"No catalog item named '{name}', so here is the CI status of all items.\n\n" + tool_get_catalog_ci_status({})
     md = e["metadata"]
     ann = md.get("annotations", {}) or {}
     kid, ns = ann.get("backstage.io/kubernetes-id"), ann.get("backstage.io/kubernetes-namespace")
@@ -550,22 +553,15 @@ def tool_get_ci_status(args):
 TOOLS = [
     {
         "name": "get_ci_status",
-        "description": "CI / pipeline / build status of ONE catalog item (component or resource), with the direct links "
-                       "to its Developer Hub catalog page and its CI tab.",
+        "description": "CI / pipeline / build status from the Developer Hub CI tab. Without a name: a summary table "
+                       "of ALL catalog items (N/A when an item has no pipeline). With a name: that one item, with "
+                       "the links to its catalog page and its CI tab. Use for every CI, pipeline or build question.",
         "inputSchema": {
             "type": "object",
-            "properties": {"name": {"type": "string", "description": "Catalog item name, e.g. coffee-shop"}},
-            "required": ["name"],
+            "properties": {"name": {"type": "string",
+                                    "description": "Optional catalog item name, e.g. coffee-shop. Leave out for all items."}},
         },
         "fn": tool_get_ci_status,
-    },
-    {
-        "name": "get_catalog_ci_status",
-        "description": "CI / pipeline status of ALL items in the Developer Hub catalog in one table: per component "
-                       "and resource the Tekton pipeline status shown on its CI tab (N/A when it has no pipeline) "
-                       "and its last OpenShift build. Use for questions about pipelines, CI or builds of the catalog.",
-        "inputSchema": {"type": "object", "properties": {}},
-        "fn": tool_get_catalog_ci_status,
     },
     {
         "name": "list_deployed_models",
@@ -579,7 +575,7 @@ TOOLS = [
         "description": "Overview of the Developer Hub software catalog: domains, systems, components, APIs, "
                        "resources and how they depend on each other. Use for questions about the architecture, "
                        "the catalog, or relations between components. Not for pipeline, CI or build status "
-                       "(use get_catalog_ci_status or get_ci_status).",
+                       "(use get_ci_status).",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": tool_get_catalog_overview,
     },

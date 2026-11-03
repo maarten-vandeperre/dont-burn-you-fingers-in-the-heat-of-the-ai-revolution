@@ -11,7 +11,7 @@ data:
       auth:
         # Arrays are replaced, not merged, across app-config files: repeat the legacy entry of
         # app-config-rhdh and add the static token MCP clients (Lightspeed, platform-mcp, Cursor,
-        # Claude, ...) use for /api/mcp-actions/v1 and the catalog REST API.
+        # Claude, ...) use for /api/mcp-actions/v1/<server> and the catalog REST API.
         externalAccess:
           - type: legacy
             options:
@@ -21,11 +21,40 @@ data:
             options:
               token: ${MCP_TOKEN}
               subject: mcp-clients
-      # Which installed actions the MCP endpoint (mcp-actions-backend) exposes as MCP tools.
-      # software-catalog-mcp-extras: fetch-catalog-entities and friends.
+      # Which installed actions the MCP endpoint (mcp-actions-backend) exposes as MCP tools
+      # (RHDH 1.10 "Interacting with MCP tools", Developer Preview):
+      #   software-catalog-mcp-extras  fetch-catalog-entities, catalog-register/unregister, template metadata
+      #   techdocs-mcp-extras          fetch-techdocs, analyze-techdocs-coverage, retrieve-techdocs-content
+      #   scaffolder-mcp-extras        list actions/tasks, dry-run and execute software templates (on behalf of the caller)
+      #   catalog, scaffolder          the core actions of the catalog and scaffolder backends
       actions:
         pluginSources:
           - software-catalog-mcp-extras
+          - techdocs-mcp-extras
+          - scaffolder-mcp-extras
+          - catalog
+          - scaffolder
+
+    # Two MCP servers on the same actions (instead of the single /api/mcp-actions/v1):
+    #   /api/mcp-actions/v1/backstage   every tool above (19): IDE agents (Cursor, Claude, VS Code,
+    #                                   Continue) and large models
+    #   /api/mcp-actions/v1/lightspeed  the catalog query only: Lightspeed sends the definitions of
+    #                                   ALL tools of its MCP servers with every question, and 19 tool
+    #                                   definitions alone overflow the 8k context of Qwen3-0.6B
+    #                                   ("413 Prompt is too long"). With a bigger model (OpenAI, a
+    #                                   32k+ model on GPU), point mcp-integration-tools in
+    #                                   lightspeed-stack.yaml at /backstage instead.
+    mcpActions:
+      servers:
+        backstage:
+          name: Red Hat Developer Hub
+          description: Software catalog, TechDocs and Software Templates (scaffolder) of Developer Hub
+        lightspeed:
+          name: Red Hat Developer Hub (compact)
+          description: Software catalog query, small enough for small-context models
+          filter:
+            include:
+              - id: 'software-catalog-mcp-extras:*'
 
     lightspeed:
       # One token per MCP server declared in lightspeed-stack.yaml (same names). The backend plugin
@@ -40,8 +69,8 @@ data:
       systemPrompt: |
         You are Developer Lightspeed, the assistant of this OpenShift AI platform in Red Hat Developer Hub.
         Always answer from live data by calling a tool first:
-        - pipeline, CI or build status of all catalog items: call get_catalog_ci_status and answer with its complete table
-        - pipeline, CI or build status of ONE item, or its links: call get_ci_status with its name and include both links
+        - any CI, pipeline or build question: call get_ci_status. Without a name for all items or "my" CI statuses
+          (answer with its complete table), with the item's name for one item (include both links)
         - deployed, served or available AI models: call list_deployed_models
         - the software catalog, architecture, systems or how components relate: call get_catalog_overview
         - one component, API, resource or system (its linked components, deployments, everything): call get_component_details with its name

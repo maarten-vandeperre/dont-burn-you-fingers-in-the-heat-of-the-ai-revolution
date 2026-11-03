@@ -2,8 +2,9 @@
 # Backstage CR over the operator's default /app-root/lightspeed-stack.yaml (extraFiles, container
 # lightspeed-core). Identical to the RHDH 1.10 operator default, plus one MCP server:
 #
-#   mcp-integration-tools  Developer Hub's own MCP endpoint (mcp-actions-backend plugin):
-#                          software-catalog-mcp-extras actions (fetch-catalog-entities, ...)
+#   mcp-integration-tools  Developer Hub's own MCP endpoint (mcp-actions-backend plugin), its compact
+#                          "lightspeed" server: software-catalog-mcp-extras only (8k-context model).
+#                          /api/mcp-actions/v1/backstage has all 19 tools, for bigger models
 #   platform-tools         platform-mcp (stack/lightspeed/mcp-server): deployed OpenShift AI models,
 #                          catalog overview/relations, CI/CD/runtime status per component
 #
@@ -36,7 +37,7 @@ customization:
 mcp_servers:
   - name: mcp-integration-tools
     provider_id: 'model-context-protocol'
-    url: 'http://localhost:7007/api/mcp-actions/v1'
+    url: 'http://localhost:7007/api/mcp-actions/v1/lightspeed'
     authorization_headers:
       Authorization: 'client'
   - name: platform-tools

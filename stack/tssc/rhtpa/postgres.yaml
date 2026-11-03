@@ -7,9 +7,13 @@ metadata:
   namespace: trusted-profile-analyzer
 spec:
   accessModes: [ReadWriteOnce]
+  # 30Gi: with --tpa-importers (CVE list + GitHub advisories + Red Hat CSAF) the database outgrew
+  # 10Gi and PostgreSQL crash-looped on "No space left on device". The StorageClass allows
+  # expansion, so re-applying this file grows an existing claim (never shrink this value: a lower
+  # size than the live claim makes the apply fail).
   resources:
     requests:
-      storage: 10Gi
+      storage: 30Gi
 ---
 apiVersion: apps/v1
 kind: Deployment

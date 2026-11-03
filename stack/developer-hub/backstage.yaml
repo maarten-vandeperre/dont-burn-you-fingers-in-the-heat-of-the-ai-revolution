@@ -27,6 +27,12 @@ spec:
           key: lightspeed-stack.yaml
           mountPath: /app-root
           containers: [lightspeed-core]
+        # Llama Stack config (the LLM providers: one per MaaS model, one shared API key) over the
+        # operator default, sidecar only. Placeholder from deploy.sh = the operator default.
+        - name: lightspeed-llama-stack-config
+          key: config.yaml
+          mountPath: /app-root
+          containers: [lightspeed-core]
     extraEnvs:
       configMaps:
         - name: rhdh-cluster-params

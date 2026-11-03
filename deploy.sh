@@ -1426,7 +1426,9 @@ Scaffolder HTTP request|scaffolder-backend-module-http-request
 Scaffolder Kubernetes|scaffolder-backend-module-kubernetes
 Scaffolder GitLab|plugin-scaffolder-backend-module-gitlab(-dynamic)?([:@!]|$)
 MCP actions backend|backstage-plugin-mcp-actions-backend([:@!]|$)
-Software catalog MCP tools|software-catalog-mcp-extras([:@!]|$)"
+Software catalog MCP tools|software-catalog-mcp-extras([:@!]|$)
+TechDocs MCP tools|techdocs-mcp-extras([:@!]|$)
+Scaffolder MCP tools|scaffolder-mcp-extras([:@!]|$)"
 
 RHDH_DIR() { echo "${ROOT_DIR}/stack/developer-hub"; }
 
@@ -1711,7 +1713,12 @@ lightspeed_bootstrap() {
     oc create configmap lightspeed-stack-config -n rhdh --from-file=lightspeed-stack.yaml="$tmp" >/dev/null
     rm -f "$tmp"
   fi
-  ok "Developer Lightspeed placeholders (lightspeed-secrets, lightspeed-stack-config): ./deploy.sh lightspeed setup"
+  # Llama Stack config = operator default (the @maas-models@ marker stays a comment until
+  # `lightspeed setup` adds one provider per extra MaaS model)
+  oc get configmap lightspeed-llama-stack-config -n rhdh >/dev/null 2>&1 \
+    || oc create configmap lightspeed-llama-stack-config -n rhdh \
+         --from-file=config.yaml="$(RHDH_DIR)/lightspeed/llama-stack-config.yaml" >/dev/null
+  ok "Developer Lightspeed placeholders (lightspeed-secrets, lightspeed-stack-config, lightspeed-llama-stack-config): ./deploy.sh lightspeed setup"
 }
 
 configure_rhdh() {
@@ -1891,7 +1898,7 @@ p_lightspeed() {  # p_lightspeed sidecar|models|mcp (deeper end-to-end check: ./
                'import json,urllib.request; print(" ".join(m["identifier"] for m in json.load(urllib.request.urlopen("http://127.0.0.1:8080/v1/models", timeout=30))["models"] if m.get("model_type")=="llm"))' 2>/dev/null || true)
              echo "${m:-no LLM}"; [[ -n "$m" ]] ;;
     mcp)     local tok n1 n2; tok=$(sa_secret_value MCP_TOKEN)
-             n1=$(oc exec -n rhdh deploy/backstage-developer-hub -c backstage-backend -- curl -s --max-time 30 -X POST http://localhost:7007/api/mcp-actions/v1 \
+             n1=$(oc exec -n rhdh deploy/backstage-developer-hub -c backstage-backend -- curl -s --max-time 30 -X POST http://localhost:7007/api/mcp-actions/v1/lightspeed \
                    -H "Authorization: Bearer ${tok}" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
                    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>/dev/null | grep -o '"name":"[^"]*"' | wc -l | tr -d ' ')
              n2=$(oc exec -n rhdh deploy/backstage-developer-hub -c backstage-backend -- curl -s --max-time 30 -X POST http://platform-mcp.rhdh.svc:8080/mcp \
