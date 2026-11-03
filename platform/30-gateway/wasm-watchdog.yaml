@@ -1,0 +1,165 @@
+# Self-healing for the MaaS gateway after a cluster (re)start.
+#
+# Envoy fetches the Kuadrant wasm plugin (auth + token rate limits) once, from the
+# kuadrant-operator-wasm Service, when a gateway pod starts. If the gateway comes up before the
+# Kuadrant operator is Ready, the fetch fails and the plugin stays "fail closed" for the life of
+# the pod: every MaaS call answers 503 (wasm_fail_stream in the gateway access log), even after
+# the operator is back. Only a gateway restart recovers it.
+#
+# Every 3 minutes this job probes each gateway pod with an unauthenticated GET /v1/models:
+#   401 -> healthy (the wasm plugin runs and asks for a key)
+#   503 -> wasm plugin not loaded
+# and restarts the gateway Deployment when a pod answers 503, the wasm server is reachable again
+# and the gateway was not restarted in the last 5 minutes. Stdlib Python only, read-mostly RBAC.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: maas-gateway-watchdog
+  namespace: openshift-ingress
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: maas-gateway-watchdog
+  namespace: openshift-ingress
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [maas-default-gateway-openshift-default]
+    verbs: [get, patch]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gateways]
+    resourceNames: [maas-default-gateway]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: maas-gateway-watchdog
+  namespace: openshift-ingress
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: maas-gateway-watchdog
+subjects:
+  - kind: ServiceAccount
+    name: maas-gateway-watchdog
+    namespace: openshift-ingress
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maas-gateway-watchdog
+  namespace: openshift-ingress
+data:
+  watchdog.py: |
+    import datetime, json, ssl, sys, urllib.error, urllib.parse, urllib.request
+
+    NS = "openshift-ingress"
+    DEPLOY = "maas-default-gateway-openshift-default"
+    SELECTOR = "gateway.networking.k8s.io/gateway-name=maas-default-gateway"
+    WASM = "http://kuadrant-operator-wasm.openshift-operators.svc.cluster.local:8082/plugin.wasm"
+    SA = "/var/run/secrets/kubernetes.io/serviceaccount"
+    API = "https://kubernetes.default.svc"
+    TOKEN = open(f"{SA}/token").read().strip()
+    CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt")
+
+    def kube(method, path, body=None, ctype="application/json"):
+        req = urllib.request.Request(API + path, method=method,
+                                     data=json.dumps(body).encode() if body else None,
+                                     headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": ctype})
+        with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
+            return json.load(r)
+
+    def status(url, host=None):
+        try:
+            req = urllib.request.Request(url, method="GET", headers={"Host": host} if host else {})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except Exception as e:
+            return f"unreachable ({e})"
+
+    def log(msg):
+        print(f"{datetime.datetime.utcnow():%Y-%m-%dT%H:%M:%SZ} {msg}", flush=True)
+
+    dep = kube("GET", f"/apis/apps/v1/namespaces/{NS}/deployments/{DEPLOY}")
+    pods = kube("GET", f"/api/v1/namespaces/{NS}/pods?labelSelector={urllib.parse.quote(SELECTOR)}")["items"]
+    # Probe with the MaaS hostname of the Gateway listener, so the request matches the HTTPRoutes.
+    gw = kube("GET", f"/apis/gateway.networking.k8s.io/v1/namespaces/{NS}/gateways/maas-default-gateway")
+    host = gw["spec"]["listeners"][0]["hostname"]
+
+    broken = []
+    for p in pods:
+        ip = p.get("status", {}).get("podIP")
+        ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in p["status"].get("conditions", []))
+        if not ip or not ready:
+            continue
+        code = status(f"http://{ip}/v1/models", host)
+        log(f"{p['metadata']['name']} ({ip}): GET /v1/models without key -> {code}")
+        if code == 503:
+            broken.append(p["metadata"]["name"])
+
+    if not broken:
+        log("gateway healthy"); sys.exit(0)
+
+    wasm = status(WASM)
+    if wasm != 200:
+        log(f"wasm plugin server not ready yet ({wasm}); restarting now would fail again, waiting"); sys.exit(0)
+
+    ann = dep["spec"]["template"]["metadata"].get("annotations", {})
+    last = ann.get("kubectl.kubernetes.io/restartedAt")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if last:
+        age = (now - datetime.datetime.fromisoformat(last.replace("Z", "+00:00"))).total_seconds()
+        if age < 300:
+            log(f"gateway restarted {int(age)}s ago, giving it time"); sys.exit(0)
+
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    kube("PATCH", f"/apis/apps/v1/namespaces/{NS}/deployments/{DEPLOY}",
+         {"spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": stamp}}}}},
+         ctype="application/strategic-merge-patch+json")
+    log(f"wasm plugin not loaded in {', '.join(broken)}: restarted {DEPLOY}")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: maas-gateway-watchdog
+  namespace: openshift-ingress
+spec:
+  schedule: "*/3 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 120
+      ttlSecondsAfterFinished: 600
+      template:
+        spec:
+          serviceAccountName: maas-gateway-watchdog
+          restartPolicy: Never
+          containers:
+            - name: watchdog
+              image: registry.access.redhat.com/ubi9/python-312@sha256:d0518dd59bd42e13e33ba69c9bc2ebdf2de277f5c3e3b8072fc69b3b92ac37b7
+              command: [python3, /scripts/watchdog.py]
+              resources:
+                requests: {cpu: 10m, memory: 32Mi}
+                limits: {cpu: 200m, memory: 128Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+                runAsNonRoot: true
+                seccompProfile: {type: RuntimeDefault}
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+          volumes:
+            - name: scripts
+              configMap:
+                name: maas-gateway-watchdog

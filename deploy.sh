@@ -7,7 +7,8 @@
 # Commands
 #   stack       Fresh OpenShift 4.22 cluster, everything with oc: OpenShift AI 3.4 + MLflow +
 #               Gen AI playground + MaaS (Gemma, Qwen) + tracing, Kafka + Debezium, Service Mesh
-#               + Kiali, Developer Hub, Argo CD + Argo Rollouts, Tekton Pipelines
+#               + Kiali, Developer Hub (with the Lightspeed flavour + MCP plugins), Argo CD +
+#               Argo Rollouts, Tekton Pipelines
 #   stack-argocd  Same stack, but installed and kept in sync by Argo CD (OpenShift GitOps)
 #   cdc-demo    Insert a row in the demo database and show the Debezium event from Kafka
 #   urls        Print the URLs of every UI in the stack
@@ -16,6 +17,9 @@
 #   connectivity <cmd>  Service Interconnect (legacy DB) + Connectivity Link partner API with
 #               Dev Portal personas: setup | legacy | link | psql-check | partner-api <...> |
 #               status | urls | destroy (stack/connectivity/connectivity.sh)
+#   lightspeed <cmd>  Developer Lightspeed in Developer Hub on the MaaS model + MCP tools (deployed
+#               models, catalog relations, CI/CD per component): setup | llm | mcp | test |
+#               ask "<question>" | status | urls | destroy (stack/lightspeed/lightspeed.sh)
 #   rhdh        Developer Hub: render the catalog, wire tokens, enable the plugins of the running version
 #   sso         Install / update Keycloak (single sign-on) and GitLab on an existing stack
 #   gitlab      Push this repository into GitLab (group ai-platform) and register it with Argo CD
@@ -1112,8 +1116,9 @@ stack_bootstrap() {
          --from-literal=K8S_CLUSTER_NAME=openshift --from-literal=K8S_CLUSTER_URL=https://kubernetes.default.svc \
          --from-literal=K8S_CLUSTER_TOKEN=pending --from-literal=K8S_ACTIONS_TOKEN=pending \
          --from-literal=ARGOCD_PASSWORD=pending --from-literal=DEVHUB_CLIENT_SECRET=pending \
-         --from-literal=GITLAB_TOKEN=pending >/dev/null
+         --from-literal=GITLAB_TOKEN=pending --from-literal=MCP_TOKEN="$(rand_hex)" >/dev/null
   ok "secret rhdh/rhdh-secrets"
+  lightspeed_bootstrap
   oc get secret inventory-db -n kafka >/dev/null 2>&1 \
     || oc create secret generic inventory-db -n kafka \
          --from-literal=user-password="$(rand_hex)" --from-literal=admin-password="$(rand_hex)" >/dev/null
@@ -1221,6 +1226,7 @@ stack_urls() {
     info "Coffee shop          : not deployed: ./deploy.sh app all"
   fi
   info "Tekton Pipelines     : console > Pipelines"
+  info "Developer Lightspeed : https://$(grep -E '^RHDH_HOST=' "$RHDH_PARAMS_FILE" | cut -d= -f2-)/lightspeed   (./deploy.sh lightspeed setup | urls)"
   info "Trusted supply chain : ./deploy.sh tssc urls   (RHTAS, RHTPA, Dev Spaces, pipeline)"
   info "Kafka + Debezium CDC : ./deploy.sh cdc-demo"
 }
@@ -1418,7 +1424,9 @@ Argo CD backend|(argo-?cd-backend|argocd-backend)
 Argo CD|plugin-(redhat-)?argocd(-dynamic)?([:@!]|$);;roadiehq-backstage-plugin-argo-cd(-dynamic)?([:@!]|$)
 Scaffolder HTTP request|scaffolder-backend-module-http-request
 Scaffolder Kubernetes|scaffolder-backend-module-kubernetes
-Scaffolder GitLab|plugin-scaffolder-backend-module-gitlab(-dynamic)?([:@!]|$)"
+Scaffolder GitLab|plugin-scaffolder-backend-module-gitlab(-dynamic)?([:@!]|$)
+MCP actions backend|backstage-plugin-mcp-actions-backend([:@!]|$)
+Software catalog MCP tools|software-catalog-mcp-extras([:@!]|$)"
 
 RHDH_DIR() { echo "${ROOT_DIR}/stack/developer-hub"; }
 
@@ -1687,6 +1695,25 @@ rhdh_list_plugins() {
 
 sa_secret_value() { oc get secret rhdh-secrets -n rhdh -o jsonpath="{.data.$1}" 2>/dev/null | base64 -d 2>/dev/null || true; }
 
+# Developer Lightspeed: the Backstage CR mounts Secret lightspeed-secrets (LLM provider) and
+# ConfigMap lightspeed-stack-config (Lightspeed Core config, its MCP servers) into the lightspeed-core
+# sidecar. Created here only when missing, as placeholders: ./deploy.sh lightspeed setup owns their
+# content afterwards (MaaS key, platform-mcp), so re-running the stack never undoes that.
+lightspeed_bootstrap() {
+  oc get secret lightspeed-secrets -n rhdh >/dev/null 2>&1 \
+    || oc create secret generic lightspeed-secrets -n rhdh --from-literal=LIGHTSPEED_LLM=pending >/dev/null
+  if ! oc get configmap lightspeed-stack-config -n rhdh >/dev/null 2>&1; then
+    local tmp; tmp=$(mktemp)
+    # Without platform-mcp (deployed by `lightspeed setup`) Lightspeed Core must not list it:
+    # one unreachable MCP server makes every question fail
+    awk '/^  - name: platform-tools/ {skip=1; next} skip && (/^  - name:/ || /^[^ #]/) {skip=0} !skip' \
+      "$(RHDH_DIR)/lightspeed/lightspeed-stack.yaml" > "$tmp"
+    oc create configmap lightspeed-stack-config -n rhdh --from-file=lightspeed-stack.yaml="$tmp" >/dev/null
+    rm -f "$tmp"
+  fi
+  ok "Developer Lightspeed placeholders (lightspeed-secrets, lightspeed-stack-config): ./deploy.sh lightspeed setup"
+}
+
 configure_rhdh() {
   need oc
   step "Developer Hub: catalog, credentials and plugins"
@@ -1696,6 +1723,13 @@ configure_rhdh() {
   rhdh_render_catalog "$domain"
   wait_until 600 "Developer Hub operator (Backstage CRD)" crd_exists backstages.rhdh.redhat.com || true
   rhdh_align_api_version || die "install the Developer Hub operator first: ./deploy.sh stack (or check the subscription above)"
+  # static token of Developer Hub's MCP endpoint (Lightspeed, platform-mcp, IDE agents): keep it
+  # stable, and present before app-config-lightspeed (which reads ${MCP_TOKEN}) is applied
+  local mcp; mcp=$(sa_secret_value MCP_TOKEN); [[ -n "$mcp" && "$mcp" != pending ]] || mcp=$(rand_hex)
+  if oc get secret rhdh-secrets -n rhdh >/dev/null 2>&1 && [[ -z "$(sa_secret_value MCP_TOKEN)" ]]; then
+    oc patch secret rhdh-secrets -n rhdh --type=merge -p "{\"stringData\":{\"MCP_TOKEN\":\"${mcp}\"}}" >/dev/null
+  fi
+  lightspeed_bootstrap
   apply_k "$(RHDH_DIR)" maas-stack >/dev/null && ok "Developer Hub resources applied"
 
   wait_until 120 "service account tokens issued" bash -c "[[ -n \"\$(oc get secret rhdh-kubernetes-token -n rhdh -o jsonpath='{.data.token}')\" && -n \"\$(oc get secret rhdh-platform-actions-token -n rhdh -o jsonpath='{.data.token}')\" ]]" \
@@ -1711,6 +1745,7 @@ configure_rhdh() {
     --from-literal=ARGOCD_PASSWORD="${argo:-pending}" \
     --from-literal=DEVHUB_CLIENT_SECRET="$(oc get secret keycloak-sso-demo -n keycloak -o jsonpath='{.data.DEVHUB_CLIENT_SECRET}' 2>/dev/null | base64 -d 2>/dev/null || echo pending)" \
     --from-literal=GITLAB_TOKEN="$(gitlab_token || true)" \
+    --from-literal=MCP_TOKEN="$mcp" \
     --dry-run=client -o yaml | oc apply --server-side --force-conflicts --field-manager=maas-stack -f - >/dev/null
   ok "rhdh-secrets: Kubernetes read token, template action token, Argo CD $([[ -n "$argo" ]] && echo password || echo 'not installed')"
 
@@ -1848,6 +1883,23 @@ p_rhdh_sees() {  # p_rhdh_sees <namespace> <component>
   echo "no workloads labelled backstage.io/kubernetes-id=$2 in $1 (not deployed: ./deploy.sh app all)"; return 1
 }
 
+p_lightspeed() {  # p_lightspeed sidecar|models|mcp (deeper end-to-end check: ./deploy.sh lightspeed test)
+  case $1 in
+    sidecar) oc get deploy backstage-developer-hub -n rhdh -o jsonpath='{.spec.template.spec.containers[*].name}' | grep -q lightspeed-core \
+               && { echo "lightspeed-core present"; return 0; }; echo "no lightspeed-core container (flavour disabled?)"; return 1 ;;
+    models)  local m; m=$(oc exec -n rhdh deploy/backstage-developer-hub -c lightspeed-core -- python3 -c \
+               'import json,urllib.request; print(" ".join(m["identifier"] for m in json.load(urllib.request.urlopen("http://127.0.0.1:8080/v1/models", timeout=30))["models"] if m.get("model_type")=="llm"))' 2>/dev/null || true)
+             echo "${m:-no LLM}"; [[ -n "$m" ]] ;;
+    mcp)     local tok n1 n2; tok=$(sa_secret_value MCP_TOKEN)
+             n1=$(oc exec -n rhdh deploy/backstage-developer-hub -c backstage-backend -- curl -s --max-time 30 -X POST http://localhost:7007/api/mcp-actions/v1 \
+                   -H "Authorization: Bearer ${tok}" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+                   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>/dev/null | grep -o '"name":"[^"]*"' | wc -l | tr -d ' ')
+             n2=$(oc exec -n rhdh deploy/backstage-developer-hub -c backstage-backend -- curl -s --max-time 30 -X POST http://platform-mcp.rhdh.svc:8080/mcp \
+                   -H "Authorization: Bearer ${tok}" -H 'Content-Type: application/json' \
+                   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>/dev/null | grep -o '"name": *"[^"]*"' | wc -l | tr -d ' ')
+             echo "Developer Hub MCP: ${n1} tools, platform-mcp: ${n2} tools"; [[ "$n1" -gt 0 && "$n2" -gt 0 ]] ;;
+  esac
+}
 p_tssc() {  # p_tssc <what>
   case "$1" in
     rhtas) [[ "$(oc get securesign rhtas -n trusted-artifact-signer -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)" == True ]] \
@@ -1952,6 +2004,13 @@ validate() {
   for comp in frontend rag-service model-router coffee-shop coffee-menu; do
     v_check rhdh    "Topology data: ${comp}"                   p_rhdh_sees ai-demo "$comp"
   done
+  v_check lightspeed "lightspeed-core sidecar (operator flavour)" p_lightspeed sidecar
+  if oc get deployment platform-mcp -n rhdh >/dev/null 2>&1; then   # only once ./deploy.sh lightspeed setup ran
+    v_check lightspeed "LLM wired (MaaS key in lightspeed-secrets)" p_secret_keys rhdh lightspeed-secrets ENABLE_VLLM VLLM_URL VLLM_API_KEY
+    v_check lightspeed "platform-mcp running"                  p_deploy rhdh platform-mcp
+    v_check lightspeed "Lightspeed Core lists the MaaS model"  p_lightspeed models
+    v_check lightspeed "MCP endpoints answer tools/list"       p_lightspeed mcp
+  fi
   if oc get namespace tssc-ci >/dev/null 2>&1; then   # only once ./deploy.sh tssc setup ran
     v_check tssc    "Trusted Artifact Signer"                  p_tssc rhtas
     v_check tssc    "Trusted Profile Analyzer"                 p_tssc tpa
@@ -2328,6 +2387,7 @@ CMD=$1; shift
 [[ "$CMD" == "app" ]] && exec "${ROOT_DIR}/app/demo.sh" "$@"
 [[ "$CMD" == "tssc" ]] && exec "${ROOT_DIR}/stack/tssc/tssc.sh" "$@"
 [[ "$CMD" == "connectivity" ]] && exec "${ROOT_DIR}/stack/connectivity/connectivity.sh" "$@"
+[[ "$CMD" == "lightspeed" ]] && exec "${ROOT_DIR}/stack/lightspeed/lightspeed.sh" "$@"
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case $1 in

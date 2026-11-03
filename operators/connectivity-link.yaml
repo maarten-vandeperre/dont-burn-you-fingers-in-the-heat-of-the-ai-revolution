@@ -10,3 +10,16 @@ spec:
   name: rhcl-operator
   source: redhat-operators
   sourceNamespace: openshift-marketplace
+  # The CSV default (cpu limit 200m) is too low on a busy cluster: the operator watches every
+  # Gateway API / Kuadrant / cert-manager kind and does not finish starting before its liveness
+  # probe kills it (CrashLoopBackOff). While it is down, the kuadrant-operator-wasm Service has no
+  # endpoints, the MaaS gateway cannot fetch its wasm plugin and fails closed: every MaaS call
+  # answers 503 (wasm_fail_stream). Same requests, higher limits: starts in seconds.
+  config:
+    resources:
+      requests:
+        cpu: 200m
+        memory: 200Mi
+      limits:
+        cpu: "1"
+        memory: 512Mi

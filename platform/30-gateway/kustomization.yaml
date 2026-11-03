@@ -5,6 +5,7 @@ resources:
   - gateway-options.yaml
   - gateway.yaml
   - route.yaml
+  - wasm-watchdog.yaml       # restarts the gateway when its Kuadrant wasm plugin failed to load
 
 # Cluster specific values live in cluster-params.env (written by ./deploy.sh configure)
 # and are injected with replacements. The generated ConfigMap is marked local-config,

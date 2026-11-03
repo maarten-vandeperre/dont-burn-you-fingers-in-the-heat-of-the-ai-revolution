@@ -19,6 +19,7 @@ complete AI and application platform. Every layer can be installed with `oc` or 
 | GitLab | GitLab CE with the whole repository (`ai-platform/platform`), Keycloak sign-in, registered in Argo CD | GitLab route |
 | Argo CD + Argo Rollouts | OpenShift GitOps (default instance) + cluster-scoped Argo Rollouts | Argo CD route |
 | Tekton | OpenShift Pipelines | console > Pipelines |
+| Developer Lightspeed | Red Hat Developer Lightspeed in Developer Hub (operator `lightspeed` flavour + MCP plugins), on the platform's own Qwen model through MaaS, with MCP tools for deployed OpenShift AI models, catalog relations and CI/CD/runtime status per component | `./deploy.sh lightspeed` |
 | Connectivity | Red Hat Service Interconnect (cross-network DB link, no VPN) + a Connectivity Link (Kuadrant) Dev Portal demo: self-service API keys, approval workflow, plan-tiered rate limits | `./deploy.sh connectivity` |
 
 ```bash
@@ -125,6 +126,17 @@ Details: `stack/tssc/README.md`; demo: `docs/demos/08-trusted-software-supply-ch
 ```
 Needs `./deploy.sh app deploy` first (exposes the existing `orders-service`). Details:
 `docs/demos/10-connectivity.md`.
+
+### 2d. Optional: Developer Lightspeed (AI assistant in Developer Hub, 5-8 minutes)
+
+```bash
+./deploy.sh lightspeed setup     # MaaS tenant + key for Lightspeed, platform-mcp, Developer Hub wiring, end-to-end test
+OPENAI_API_KEY=sk-... ./deploy.sh lightspeed llm   # optional: OpenAI models next to Qwen in the model picker
+./deploy.sh lightspeed ask "Which models are deployed in OpenShift AI?"
+./deploy.sh lightspeed test      # MCP endpoints + three demo questions
+```
+The operator side (Developer Hub operator with its `lightspeed` flavour, OpenShift AI + MaaS, the
+MCP plugins) comes with `./deploy.sh stack`. Details: `docs/demos/13-developer-lightspeed.md`.
 
 ### 3. Check everything
 
@@ -321,6 +333,8 @@ observability/             RHOAI monitoring stack, telemetry (+ Loki usage logs 
 argocd/                    Application templates (MaaS, observability, stack) + RBAC
 app/                       demo applications (Quarkus, React, Camel, LangChain4j) + deploy/ + demo.sh
   deploy/rollouts-demo/    standalone Argo Rollouts tutorial: 4 strategies, AnalysisTemplate, Tekton pipeline
+stack/lightspeed/          Developer Lightspeed: MaaS subscription, platform-mcp MCP server, lightspeed.sh (./deploy.sh lightspeed)
+stack/developer-hub/lightspeed/  app-config-lightspeed + Lightspeed Core config (MCP servers)
 stack/connectivity/        Service Interconnect (legacy DB) + Connectivity Link partner API demo (./deploy.sh connectivity)
 docs/demos/                short demo guides
 deploy.sh

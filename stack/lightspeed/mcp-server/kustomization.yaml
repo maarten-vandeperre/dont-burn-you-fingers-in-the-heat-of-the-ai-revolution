@@ -1,0 +1,16 @@
+# platform-mcp: the MCP server that gives Developer Lightspeed live platform data
+# (deployed models, catalog relations, CI/CD/runtime status per component).
+# Applied by ./deploy.sh lightspeed setup. The MCP token comes from rhdh/rhdh-secrets (MCP_TOKEN).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: rhdh
+resources:
+  - rbac.yaml
+  - deployment.yaml
+configMapGenerator:
+  - name: platform-mcp-code
+    files:
+      - server.py
+generatorOptions:
+  labels:
+    app.kubernetes.io/part-of: developer-lightspeed

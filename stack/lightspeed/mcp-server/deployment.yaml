@@ -1,0 +1,66 @@
+# Python standard library only: no image build, the code is a ConfigMap (server.py).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: platform-mcp
+  labels:
+    app: platform-mcp
+    app.kubernetes.io/part-of: developer-lightspeed
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: platform-mcp
+  template:
+    metadata:
+      labels:
+        app: platform-mcp
+    spec:
+      serviceAccountName: platform-mcp
+      containers:
+        - name: server
+          # ubi9/python-312 (linux/amd64), pinned
+          image: registry.access.redhat.com/ubi9/python-312@sha256:d0518dd59bd42e13e33ba69c9bc2ebdf2de277f5c3e3b8072fc69b3b92ac37b7
+          command: ["python3", "-u", "/opt/platform-mcp/server.py"]
+          env:
+            - name: MCP_TOKEN
+              valueFrom:
+                secretKeyRef: {name: rhdh-secrets, key: MCP_TOKEN}
+            - name: RHDH_URL
+              value: http://backstage-developer-hub.rhdh.svc
+            - name: RHDH_PUBLIC_URL
+              valueFrom:
+                configMapKeyRef: {name: rhdh-cluster-params, key: RHDH_HOST}
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8080}
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          volumeMounts:
+            - name: code
+              mountPath: /opt/platform-mcp
+      volumes:
+        - name: code
+          configMap:
+            name: platform-mcp-code
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: platform-mcp
+  labels:
+    app: platform-mcp
+spec:
+  selector:
+    app: platform-mcp
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

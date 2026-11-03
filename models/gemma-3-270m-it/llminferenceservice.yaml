@@ -53,6 +53,14 @@ spec:
         env:
           - name: HF_HOME
             value: /tmp/hf_home
+          # vLLM CPU binds one OpenMP thread per core of the NODE (16) by default, while the pod may
+          # only use its CPU limit: the threads then spend most of their time CFS-throttled
+          # (measured: ~2 tokens/s for Qwen3-0.6B). Fewer threads than the limit, no core pinning
+          # (the nodes are shared): several times faster generation.
+          - name: VLLM_CPU_OMP_THREADS_BIND
+            value: nobind
+          - name: OMP_NUM_THREADS
+            value: "3"
           - name: VLLM_CPU_KVCACHE_SPACE
             value: "4"
         ports:

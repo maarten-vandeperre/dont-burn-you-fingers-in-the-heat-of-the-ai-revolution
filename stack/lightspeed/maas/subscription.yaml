@@ -1,0 +1,33 @@
+# Developer Lightspeed is a MaaS tenant like any other application: its own identity
+# (ServiceAccount rhdh/developer-lightspeed), its own API key (minted by lightspeed.sh with
+# that identity's token) and its own token budget. Every Lightspeed question shows up in
+# `./deploy.sh usage` under subscription "developer-lightspeed".
+#
+# Why not the free tier: one Lightspeed turn = system prompt + MCP tool definitions + tool
+# results, sent twice (tool call, then answer) => ~5-8k tokens. The free tier allows 5k/min.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: developer-lightspeed
+  namespace: rhdh
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: developer-lightspeed
+  namespace: models-as-a-service
+  annotations:
+    openshift.io/display-name: "Developer Lightspeed"
+    openshift.io/description: "Token budget of the Developer Lightspeed assistant in Developer Hub"
+spec:
+  owner:
+    groups: []
+    users:
+      - system:serviceaccount:rhdh:developer-lightspeed
+  modelRefs:
+    - name: qwen3-0-6b
+      namespace: maas-models
+      tokenRateLimits:
+        - limit: 200000
+          window: 1m
+  priority: 30

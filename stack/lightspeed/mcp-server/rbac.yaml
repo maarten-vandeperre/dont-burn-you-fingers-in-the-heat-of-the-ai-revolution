@@ -1,0 +1,44 @@
+# Read-only identity of platform-mcp: exactly the resources its three tools read.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-mcp
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: platform-mcp-read
+rules:
+  # list_deployed_models: OpenShift AI model servers + MaaS publication / quotas
+  - apiGroups: [serving.kserve.io]
+    resources: [llminferenceservices, inferenceservices, servingruntimes]
+    verbs: [get, list]
+  - apiGroups: [maas.opendatahub.io]
+    resources: [maasmodelrefs, maassubscriptions, externalmodels]
+    verbs: [get, list]
+  # get_component_details: CI (Builds, Tekton), CD (Argo CD), runtime (Deployments, Rollouts)
+  - apiGroups: [build.openshift.io]
+    resources: [buildconfigs, builds]
+    verbs: [get, list]
+  - apiGroups: [tekton.dev]
+    resources: [pipelineruns]
+    verbs: [get, list]
+  - apiGroups: [argoproj.io]
+    resources: [applications, rollouts]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: platform-mcp-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: platform-mcp-read
+subjects:
+  - kind: ServiceAccount
+    name: platform-mcp
+    namespace: rhdh

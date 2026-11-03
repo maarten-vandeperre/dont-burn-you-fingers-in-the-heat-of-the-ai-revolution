@@ -1,0 +1,57 @@
+# Developer Lightspeed + MCP configuration of Developer Hub, a second app-config file next to
+# app-config-rhdh (the Backstage CR lists both; this one is loaded last and wins on overlap).
+# MCP_TOKEN lives in Secret rhdh/rhdh-secrets (created by deploy.sh, never in git).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config-lightspeed
+data:
+  app-config-lightspeed.yaml: |
+    backend:
+      auth:
+        # Arrays are replaced, not merged, across app-config files: repeat the legacy entry of
+        # app-config-rhdh and add the static token MCP clients (Lightspeed, platform-mcp, Cursor,
+        # Claude, ...) use for /api/mcp-actions/v1 and the catalog REST API.
+        externalAccess:
+          - type: legacy
+            options:
+              subject: legacy-default-config
+              secret: ${BACKEND_SECRET}
+          - type: static
+            options:
+              token: ${MCP_TOKEN}
+              subject: mcp-clients
+      # Which installed actions the MCP endpoint (mcp-actions-backend) exposes as MCP tools.
+      # software-catalog-mcp-extras: fetch-catalog-entities and friends.
+      actions:
+        pluginSources:
+          - software-catalog-mcp-extras
+
+    lightspeed:
+      # One token per MCP server declared in lightspeed-stack.yaml (same names). The backend plugin
+      # forwards them to Lightspeed Core in the MCP-HEADERS header ("Authorization: client").
+      mcpServers:
+        - name: mcp-integration-tools
+          token: ${MCP_TOKEN}
+        - name: platform-tools
+          token: ${MCP_TOKEN}
+      # Short and explicit on purpose: the default model is Qwen3-0.6B (8k context, CPU). Qwen3
+      # reasons in <think>...</think> first; the chat UI shows that as a collapsible "reasoning" part.
+      systemPrompt: |
+        You are Developer Lightspeed, the assistant of this OpenShift AI platform in Red Hat Developer Hub.
+        Always answer from live data by calling a tool first:
+        - deployed, served or available AI models: call list_deployed_models
+        - the software catalog, architecture, systems or how components relate: call get_catalog_overview
+        - one component, API, resource or system (its linked components, CI, builds, pipelines, deployments): call get_component_details with its name
+        Then answer briefly in Markdown, using only facts from the tool result. Keep names exactly as the tool wrote them.
+        If a tool returns nothing useful, say so. Never invent components, models or statuses.
+      # Welcome prompts in the Lightspeed chat
+      prompts:
+        - title: Deployed models
+          message: Which models are deployed in OpenShift AI?
+        - title: Catalog overview
+          message: Give me an overview of the software catalog and how the components relate to each other.
+        - title: Component status
+          message: What is linked to the coffee-shop component and what is its CI status?
+        - title: Model router
+          message: Show the details of model-router, which models does it depend on?
