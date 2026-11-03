@@ -8,4 +8,4 @@ metadata:
 spec:
   type: url
   targets:
-    - https://gitlab-gitlab.apps.ocp.lrrpg.sandbox760.opentlc.com/ai-platform/platform/-/blob/main/app/software-templates/llm-app/template.yaml
+    - https://gitlab-gitlab.apps.ocp.mrkvg.sandbox670.opentlc.com/ai-platform/platform/-/blob/main/app/software-templates/llm-app/template.yaml

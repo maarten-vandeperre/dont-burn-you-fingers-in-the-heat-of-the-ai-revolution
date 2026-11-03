@@ -97,8 +97,23 @@ def catalog_entities():
             return _catalog["entities"]
         req = urllib.request.Request(f"{RHDH_URL}/api/catalog/entities",
                                      headers={"Authorization": f"Bearer {MCP_TOKEN}"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            ents = json.load(r)
+        # Developer Hub answers 429 / 503 for a while after a (re)start or under a burst of
+        # requests: retry with backoff (Retry-After when given), else serve the last good copy.
+        for attempt in range(5):
+            try:
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    ents = json.load(r)
+                break
+            except urllib.error.HTTPError as e:
+                if e.code not in (429, 502, 503, 504) or attempt == 4:
+                    if _catalog["entities"]:
+                        return _catalog["entities"]
+                    raise
+                try:
+                    wait = min(float(e.headers.get("Retry-After") or 0), 10.0)
+                except ValueError:
+                    wait = 0.0
+                time.sleep(wait or 2 ** attempt)
         # Package / Plugin = the RHDH extensions catalog (installable plugins), not the platform
         ents = [e for e in ents if e.get("kind") not in ("Location", "Template", "Package", "Plugin")]
         _catalog.update(at=time.time(), entities=ents)

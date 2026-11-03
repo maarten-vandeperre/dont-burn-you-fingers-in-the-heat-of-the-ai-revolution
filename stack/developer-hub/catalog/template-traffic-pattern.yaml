@@ -99,6 +99,6 @@ spec:
       - title: rag-service in the catalog
         entityRef: component:default/rag-service
       - title: Kiali graph (versioned)
-        url: https://kiali-istio-system.apps.ocp.lrrpg.sandbox760.opentlc.com/console/graph/namespaces/?namespaces=ai-demo&graphType=versionedApp
+        url: https://kiali-istio-system.apps.ocp.mrkvg.sandbox670.opentlc.com/console/graph/namespaces/?namespaces=ai-demo&graphType=versionedApp
       - title: Demo UI (Traffic patterns tab)
-        url: https://ai-demo-ai-demo.apps.ocp.lrrpg.sandbox760.opentlc.com
+        url: https://ai-demo-ai-demo.apps.ocp.mrkvg.sandbox670.opentlc.com

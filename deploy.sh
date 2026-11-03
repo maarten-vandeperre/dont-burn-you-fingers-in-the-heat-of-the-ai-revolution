@@ -1237,6 +1237,11 @@ stack_urls() {
   fi
   info "Tekton Pipelines     : console > Pipelines"
   info "Developer Lightspeed : https://$(grep -E '^RHDH_HOST=' "$RHDH_PARAMS_FILE" | cut -d= -f2-)/lightspeed   (./deploy.sh lightspeed setup | urls)"
+  # stack only creates placeholders: until `lightspeed setup` registers a model the chat shows
+  # "Connect an LLM to get started"
+  if [[ -z "$(oc get secret lightspeed-secrets -n rhdh -o jsonpath='{.data.VLLM_URL}' 2>/dev/null)" ]]; then
+    warn "Developer Lightspeed has no LLM yet (chat says 'Connect an LLM to get started'): run ./deploy.sh lightspeed setup"
+  fi
   info "Trusted supply chain : ./deploy.sh tssc urls   (RHTAS, RHTPA, Dev Spaces, pipeline)"
   info "Kafka + Debezium CDC : ./deploy.sh cdc-demo"
 }

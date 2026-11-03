@@ -108,4 +108,4 @@ spec:
       - title: coffee-menu in the catalog
         entityRef: component:default/coffee-menu
       - title: Coffee shop (Menu & resilience tab)
-        url: https://coffee-ai-demo.apps.ocp.lrrpg.sandbox760.opentlc.com
+        url: https://coffee-ai-demo.apps.ocp.mrkvg.sandbox670.opentlc.com

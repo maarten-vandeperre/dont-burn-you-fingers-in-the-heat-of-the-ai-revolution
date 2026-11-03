@@ -86,6 +86,18 @@ run_deploy app all
 printf '\n\n\n\n'
 printf '%s\n' \
   '#######################################################' \
+  '############# Developer Lightspeed setup ##############' \
+  '#######################################################'
+printf '\n\n\n\n'
+
+# `stack` only installs the Lightspeed flavour with placeholders (Developer Hub then shows
+# "Connect an LLM to get started"). This registers the MaaS models, the MCP tools and checks the chat.
+# Export OPENAI_API_KEY first to also offer OpenAI in the model picker.
+run_deploy lightspeed setup
+
+printf '\n\n\n\n'
+printf '%s\n' \
+  '#######################################################' \
   '##################### TSSC setup ######################' \
   '#######################################################'
 printf '\n\n\n\n'

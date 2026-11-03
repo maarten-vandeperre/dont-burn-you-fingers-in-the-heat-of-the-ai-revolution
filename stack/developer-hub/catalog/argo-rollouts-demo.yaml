@@ -5,10 +5,10 @@ metadata:
   title: "Argo Rollouts: deployment strategies"
   description: Canary, blue-green, and both with an automated analysis gate -- independent of the ai-demo mesh stack
   links:
-    - {url: "https://canary-demo-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Canary demo (blended), icon: dashboard}
-    - {url: "https://bluegreen-demo-preview-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Blue-green demo (preview), icon: dashboard}
-    - {url: "https://gitlab-gitlab.apps.ocp.lrrpg.sandbox760.opentlc.com/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo", title: Source (GitLab)}
-    - {url: "https://openshift-gitops-server-openshift-gitops.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Argo CD}
+    - {url: "https://canary-demo-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Canary demo (blended), icon: dashboard}
+    - {url: "https://bluegreen-demo-preview-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Blue-green demo (preview), icon: dashboard}
+    - {url: "https://gitlab-gitlab.apps.ocp.mrkvg.sandbox670.opentlc.com/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo", title: Source (GitLab)}
+    - {url: "https://openshift-gitops-server-openshift-gitops.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Argo CD}
 spec:
   owner: platform-team
   domain: ai-platform
@@ -22,13 +22,13 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: rollouts-canary
     backstage.io/kubernetes-namespace: rollouts-demo
-    backstage.io/source-location: url:https://gitlab-gitlab.apps.ocp.lrrpg.sandbox760.opentlc.com/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.ocp.mrkvg.sandbox670.opentlc.com/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
     tekton.dev/cicd: "true"
     argocd/app-name: rollouts-demo
   links:
-    - {url: "https://canary-demo-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Blended (all traffic), icon: dashboard}
-    - {url: "https://canary-demo-canary-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Canary pods only}
-    - {url: "https://canary-demo-stable-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Stable pods only}
+    - {url: "https://canary-demo-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Blended (all traffic), icon: dashboard}
+    - {url: "https://canary-demo-canary-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Canary pods only}
+    - {url: "https://canary-demo-stable-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Stable pods only}
     - {url: "https://argo-rollouts.readthedocs.io/en/stable/getting-started/", title: "Argo Rollouts docs: getting started"}
   tags: [argo-rollouts, canary]
 spec:
@@ -46,12 +46,12 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: rollouts-bluegreen
     backstage.io/kubernetes-namespace: rollouts-demo
-    backstage.io/source-location: url:https://gitlab-gitlab.apps.ocp.lrrpg.sandbox760.opentlc.com/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.ocp.mrkvg.sandbox670.opentlc.com/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
     tekton.dev/cicd: "true"
     argocd/app-name: rollouts-demo
   links:
-    - {url: "https://bluegreen-demo-active-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Active, icon: dashboard}
-    - {url: "https://bluegreen-demo-preview-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Preview}
+    - {url: "https://bluegreen-demo-active-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Active, icon: dashboard}
+    - {url: "https://bluegreen-demo-preview-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Preview}
     - {url: "https://argo-rollouts.readthedocs.io/en/stable/features/bluegreen/", title: "Argo Rollouts docs: blue-green"}
   tags: [argo-rollouts, blue-green]
 spec:
@@ -69,12 +69,12 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: rollouts-bluegreen-analysis
     backstage.io/kubernetes-namespace: rollouts-demo
-    backstage.io/source-location: url:https://gitlab-gitlab.apps.ocp.lrrpg.sandbox760.opentlc.com/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.ocp.mrkvg.sandbox670.opentlc.com/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
     tekton.dev/cicd: "true"
     argocd/app-name: rollouts-demo
   links:
-    - {url: "https://bluegreen-analysis-demo-active-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Active, icon: dashboard}
-    - {url: "https://bluegreen-analysis-demo-preview-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Preview}
+    - {url: "https://bluegreen-analysis-demo-active-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Active, icon: dashboard}
+    - {url: "https://bluegreen-analysis-demo-preview-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Preview}
     - {url: "https://argo-rollouts.readthedocs.io/en/stable/features/analysis/", title: "Argo Rollouts docs: analysis"}
   tags: [argo-rollouts, blue-green, analysis]
 spec:
@@ -93,13 +93,13 @@ metadata:
   annotations:
     backstage.io/kubernetes-id: rollouts-canary-analysis
     backstage.io/kubernetes-namespace: rollouts-demo
-    backstage.io/source-location: url:https://gitlab-gitlab.apps.ocp.lrrpg.sandbox760.opentlc.com/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
+    backstage.io/source-location: url:https://gitlab-gitlab.apps.ocp.mrkvg.sandbox670.opentlc.com/ai-platform/platform/-/tree/main/app/deploy/rollouts-demo/
     tekton.dev/cicd: "true"
     argocd/app-name: rollouts-demo
   links:
-    - {url: "https://canary-analysis-demo-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Blended (all traffic), icon: dashboard}
-    - {url: "https://canary-analysis-demo-canary-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Canary pods only}
-    - {url: "https://canary-analysis-demo-stable-rollouts-demo.apps.ocp.lrrpg.sandbox760.opentlc.com", title: Stable pods only}
+    - {url: "https://canary-analysis-demo-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Blended (all traffic), icon: dashboard}
+    - {url: "https://canary-analysis-demo-canary-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Canary pods only}
+    - {url: "https://canary-analysis-demo-stable-rollouts-demo.apps.ocp.mrkvg.sandbox670.opentlc.com", title: Stable pods only}
     - {url: "https://argo-rollouts.readthedocs.io/en/stable/features/analysis/", title: "Argo Rollouts docs: analysis"}
   tags: [argo-rollouts, canary, analysis]
 spec:
@@ -139,7 +139,7 @@ metadata:
     backstage.io/kubernetes-namespace: rollouts-demo
     backstage.io/kubernetes-label-selector: tekton.dev/pipeline=rollouts-release
   links:
-    - {url: "https://console-openshift-console.apps.ocp.lrrpg.sandbox760.opentlc.com/k8s/ns/rollouts-demo/tekton.dev~v1~Pipeline/rollouts-release", title: "Tekton pipeline (OpenShift console)"}
+    - {url: "https://console-openshift-console.apps.ocp.mrkvg.sandbox670.opentlc.com/k8s/ns/rollouts-demo/tekton.dev~v1~Pipeline/rollouts-release", title: "Tekton pipeline (OpenShift console)"}
   tags: [tekton, ci-cd]
 spec:
   type: ci-pipeline
