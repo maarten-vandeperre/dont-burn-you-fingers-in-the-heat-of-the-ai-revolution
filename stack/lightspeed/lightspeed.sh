@@ -6,7 +6,7 @@
 #   ./deploy.sh lightspeed llm          only (re)create the LLM wiring: MaaS subscription, API key,
 #                                       Secret lightspeed-secrets (--rotate: always mint a new key)
 #   ./deploy.sh lightspeed mcp          only (re)deploy platform-mcp (after changing server.py)
-#   ./deploy.sh lightspeed test         end-to-end checks: MCP endpoints, tools, and three questions
+#   ./deploy.sh lightspeed test         end-to-end checks: MCP endpoints, tools, and five questions
 #                                       through Lightspeed Core (the same path the chat UI uses)
 #   ./deploy.sh lightspeed ask "<question>" [model]
 #                                       one question through Lightspeed Core, prints the tool calls
@@ -178,7 +178,7 @@ setup_llm() {
               --from-literal=VLLM_URL="https://$(maas_host)/${MODELS_NS}/${MODEL}/v1"
               --from-literal=VLLM_API_KEY="$key"
               --from-literal=VLLM_TLS_VERIFY=true
-              --from-literal=VLLM_MAX_TOKENS=1024)
+              --from-literal=VLLM_MAX_TOKENS=2048)
   [[ -n "$openai" ]] && args+=(--from-literal=ENABLE_OPENAI=true --from-literal=OPENAI_API_KEY="$openai")
   oc create secret generic lightspeed-secrets -n "$NS" "${args[@]}" --dry-run=client -o yaml \
     | oc apply --server-side --force-conflicts --field-manager=lightspeed -f - >/dev/null
@@ -360,7 +360,16 @@ ask() {  # ask <question> [model]
        | awk '/^  systemPrompt: \|/ {f=1; next} f && /^  [a-zA-Z]/ {f=0} f {sub(/^    /, ""); print}')
   info "Q (${provider}/${id}): ${q}"
   local since; since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  out=$(oc exec -n "$NS" "deploy/${DEPLOY}" -c lightspeed-core -- python3 -c "$LCS_PY" "$q" "$id" "$provider" "$headers" "$sp")
+  # The Developer Hub operator can roll the pod once more after a config change; an exec into the
+  # old pod is then killed. Wait for the rollout and ask again once.
+  local try
+  for try in 1 2; do
+    out=$(oc exec -n "$NS" "deploy/${DEPLOY}" -c lightspeed-core -- python3 -c "$LCS_PY" "$q" "$id" "$provider" "$headers" "$sp") && break
+    [[ "$try" == 2 ]] && { warn "oc exec into lightspeed-core failed twice"; return 1; }
+    warn "oc exec into lightspeed-core was interrupted (pod replaced?): waiting for the rollout, asking again"
+    oc rollout status "deploy/${DEPLOY}" -n "$NS" --timeout=600s >/dev/null || true
+    since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  done
   if jq -e '.error' <<<"$out" >/dev/null 2>&1; then warn "Lightspeed Core answered $(jq -c . <<<"$out")"; return 1; fi
   jq -e '.errors' <<<"$out" >/dev/null 2>&1 && warn "errors in the stream: $(jq -c .errors <<<"$out")"
   # Ground truth from platform-mcp's own log (the stream does not always carry the tool name);
@@ -371,6 +380,7 @@ ask() {  # ask <question> [model]
                | awk 'NF && !seen[$0]++' | paste -sd, -)
   info "MCP tools called: ${LAST_TOOLS:-none}"
   echo "    ${G}A:${N} (Qwen3 reasoning <think>...</think> omitted here; the chat UI shows it as a collapsible section)"
+  [[ -n "$(jq -r '.response // empty' <<<"$out" 2>/dev/null)" ]] || { warn "empty answer"; return 1; }
   jq -r '.response' <<<"$out" | perl -0pe 's/<think>.*?<\/think>\s*//gs' | sed '/^[[:space:]]*$/N;/^\n$/D' | sed 's/^/    | /'
 }
 
@@ -412,6 +422,8 @@ test_all() {
 list_deployed_models|Which models are deployed in OpenShift AI?
 get_catalog_overview|Give me an overview of the software catalog and how the components relate to each other.
 get_component_details|What is linked to the coffee-shop component and what is its CI status?
+get_catalog_ci_status|Which items are in the catalog and what is their pipeline status? If no pipeline, say N/A.
+get_ci_status|What is the CI status of coffee-shop? Give me the links.
 QUESTIONS
   [[ "$fails" == 0 ]] && ok "all Lightspeed checks passed" || die "${fails} check(s) failed"
 }

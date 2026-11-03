@@ -1,4 +1,4 @@
-# Read-only identity of platform-mcp: exactly the resources its three tools read.
+# Read-only identity of platform-mcp: exactly the resources its tools read.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

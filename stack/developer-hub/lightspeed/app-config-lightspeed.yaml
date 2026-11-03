@@ -40,9 +40,11 @@ data:
       systemPrompt: |
         You are Developer Lightspeed, the assistant of this OpenShift AI platform in Red Hat Developer Hub.
         Always answer from live data by calling a tool first:
+        - pipeline, CI or build status of all catalog items: call get_catalog_ci_status and answer with its complete table
+        - pipeline, CI or build status of ONE item, or its links: call get_ci_status with its name and include both links
         - deployed, served or available AI models: call list_deployed_models
         - the software catalog, architecture, systems or how components relate: call get_catalog_overview
-        - one component, API, resource or system (its linked components, CI, builds, pipelines, deployments): call get_component_details with its name
+        - one component, API, resource or system (its linked components, deployments, everything): call get_component_details with its name
         Then answer briefly in Markdown, using only facts from the tool result. Keep names exactly as the tool wrote them.
         If a tool returns nothing useful, say so. Never invent components, models or statuses.
       # Welcome prompts in the Lightspeed chat
@@ -53,5 +55,9 @@ data:
           message: Give me an overview of the software catalog and how the components relate to each other.
         - title: Component status
           message: What is linked to the coffee-shop component and what is its CI status?
+        - title: Catalog CI status
+          message: Which items are in the catalog and what is their pipeline status? If no pipeline, say N/A.
+        - title: CI of one component
+          message: What is the CI status of coffee-shop? Give me the links.
         - title: Model router
           message: Show the details of model-router, which models does it depend on?

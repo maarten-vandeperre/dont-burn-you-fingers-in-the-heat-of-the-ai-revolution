@@ -11,7 +11,7 @@ things that make it useful for the developers on *this* platform:
   in OpenShift AI, how the catalog fits together, and for every catalog component what it is
   linked to and what its CI / CD / runtime status is right now.
 
-**Duration:** 10 minutes (3 Part A, 5 Part B, 2 Part C).
+**Duration:** 11 minutes (3 Part A, 6 Part B, 2 Part C).
 
 ```
 Developer Hub pod (namespace rhdh)
@@ -28,6 +28,10 @@ Developer Hub pod (namespace rhdh)
                                           list_deployed_models   LLMInferenceService / InferenceService,
                                                                  MaaSModelRef, MaaSSubscription
                                           get_catalog_overview   catalog entities + relations
+                                          get_catalog_ci_status  every component/resource: CI-tab
+                                                                 pipeline status (N/A) + last build
+                                          get_ci_status          one item: pipeline + build status,
+                                                                 links to its catalog page and CI tab
                                           get_component_details  relations + Builds, PipelineRuns,
                                                                  Argo CD, Deployments, Rollouts
 ```
@@ -55,7 +59,7 @@ Developer Hub pod (namespace rhdh)
    # optional: also offer OpenAI models in the chat's model picker
    OPENAI_API_KEY=sk-... ./deploy.sh lightspeed llm
    ```
-3. Check right before presenting (asks the three demo questions through the same API the chat UI
+3. Check right before presenting (asks the five demo questions through the same API the chat UI
    uses; on CPU every answer takes 30-90 s):
    ```bash
    ./deploy.sh lightspeed test
@@ -74,7 +78,7 @@ Developer Hub pod (namespace rhdh)
 * **Do:** Developer Hub > **Lightspeed** in the left navigation (or the Lightspeed button at the
   bottom right of any page). Open the model picker at the top of the chat.
 * **You see:** the welcome prompts *Deployed models*, *Catalog overview*, *Component status*,
-  *Model router*; one model `qwen3-0-6b` (provider `vllm`), plus `openai/...` models only when you
+  *Catalog CI status*, *CI of one component*, *Model router*; one model `qwen3-0-6b` (provider `vllm`), plus `openai/...` models only when you
   ran `lightspeed llm` with `OPENAI_API_KEY`.
 * **Say:** "This is Red Hat Developer Lightspeed. The model behind it is not a SaaS endpoint: it is
   the Qwen model we serve ourselves in OpenShift AI, called through Models-as-a-Service with the
@@ -90,7 +94,7 @@ Developer Hub pod (namespace rhdh)
 
 ---
 
-## Part B: live platform knowledge through MCP (5 minutes)
+## Part B: live platform knowledge through MCP (6 minutes)
 
 **B1. Deployed models in OpenShift AI.**
 * **Do:** click the welcome prompt **Deployed models** ("Which models are deployed in OpenShift AI?").
@@ -133,7 +137,27 @@ Developer Hub pod (namespace rhdh)
   the cluster objects that carry the component's `backstage.io/kubernetes-id`: Builds, Tekton
   PipelineRuns, Argo CD Applications, Deployments, Rollouts, model servers."
 
-**B4. Developer Hub's own MCP server.**
+**B4. CI status of the whole catalog, like the CI tab.**
+* **Do:** prompt **Catalog CI status** ("Which items are in the catalog and what is their pipeline
+  status? If no pipeline, say N/A.").
+* **You see:** the tool `get_catalog_ci_status`; one table with every component and resource, the
+  pipeline status its **CI tab** shows (the Tekton plugin: PipelineRuns labelled
+  `backstage.io/kubernetes-id=<id>`; `N/A` when there are none) and the last OpenShift build. With
+  the current catalog the components show `N/A` and their builds `Complete (<name>-2, ...)`; the
+  resources without pipeline and build share one `N/A` row (keeps the answer short enough for the
+  small model); `coffee-menu-tssc` (demo 8, after `./deploy.sh rhdh`) shows its last
+  `trusted-supply-chain` run.
+* **Do:** Developer Hub > Catalog > `coffee-shop` > *CI* tab: the same (empty) PipelineRun list.
+* **Say:** "One question, one tool call, the CI tab of every component in one table. The tool
+  applies the same selection as the Tekton plugin, so the assistant and the UI never disagree."
+
+* **Do:** prompt **CI of one component** ("What is the CI status of coffee-shop? Give me the links.").
+* **You see:** the tool `get_ci_status(name=coffee-shop)`; the pipeline status (`N/A`), the last
+  OpenShift build, and two clickable links: the catalog page
+  `https://<rhdh-host>/catalog/default/component/coffee-shop` and its CI tab `.../coffee-shop/ci`.
+  Click the CI link: it opens the tab the answer describes.
+
+**B5. Developer Hub's own MCP server.**
 * **Do:** ask "Use query-catalog-entities to list all Resources of type ai-model."
 * **You see:** the tool `software-catalog-mcp-extras.query-catalog-entities` (from Developer Hub's
   MCP endpoint) and the three model resources.
@@ -151,7 +175,7 @@ Developer Hub pod (namespace rhdh)
 | `stack/developer-hub/lightspeed/app-config-lightspeed.yaml` | the static `MCP_TOKEN` (`externalAccess`), `backend.actions.pluginSources`, `lightspeed.mcpServers` (one token per MCP server), the short `systemPrompt` that maps question types to tools, the welcome `prompts` |
 | `stack/developer-hub/lightspeed/lightspeed-stack.yaml` | `mcp_servers`: `mcp-integration-tools` (Developer Hub) and `platform-tools` (platform-mcp), `Authorization: 'client'` |
 | `stack/lightspeed/maas/subscription.yaml` | Lightspeed's MaaS identity and token budget |
-| `stack/lightspeed/mcp-server/server.py` | three tools, pre-digested Markdown output: a 0.6B model answers well when the tool already joined and filtered the data |
+| `stack/lightspeed/mcp-server/server.py` | five tools, pre-digested Markdown output: a 0.6B model answers well when the tool already joined and filtered the data |
 | `stack/lightspeed/mcp-server/rbac.yaml` | read-only, exactly the resources the tools read |
 
 The important snippets:
@@ -205,6 +229,8 @@ lightspeed:
     - {name: platform-tools, token: ${MCP_TOKEN}}
   systemPrompt: |
     ... deployed models: call list_deployed_models; catalog: get_catalog_overview;
+    pipelines / CI of the catalog: get_catalog_ci_status (show its table as-is);
+    CI of one item + links: get_ci_status;
     one component: get_component_details ...
 ```
 
@@ -214,7 +240,7 @@ ENABLE_VLLM=true
 VLLM_URL=https://maas.<apps-domain>/maas-models/qwen3-0-6b/v1
 VLLM_API_KEY=sk-oai-...               # minted as system:serviceaccount:rhdh:developer-lightspeed
 VLLM_TLS_VERIFY=true
-VLLM_MAX_TOKENS=1024                   # 8k context: leave room for system prompt + tool results
+VLLM_MAX_TOKENS=2048                   # 8k context: reasoning + a 21-row table fit, tool results keep ~5k
 ```
 
 ---
@@ -225,7 +251,7 @@ VLLM_MAX_TOKENS=1024                   # 8k context: leave room for system promp
 ./deploy.sh lightspeed status                       # CR, sidecar, LLM secret, subscription, platform-mcp, MCP plugins
 ./deploy.sh lightspeed ask "Which models are deployed in OpenShift AI?"
 ./deploy.sh lightspeed ask "What is the CI status of model-router?"
-./deploy.sh lightspeed test                         # MCP endpoints + the three demo questions, PASS/FAIL
+./deploy.sh lightspeed test                         # MCP endpoints + the five demo questions, PASS/FAIL
 oc logs -n rhdh deploy/platform-mcp                 # one line per tool call: tool, arguments, size, time
 ./deploy.sh usage                                   # tokens of subscription developer-lightspeed
 ```
@@ -253,4 +279,6 @@ gone after a Developer Hub restart. Remove the whole wiring with `./deploy.sh li
 | Very slow answers (minutes), vLLM log shows ~2 tokens/s | vLLM CPU starts one OpenMP thread per node core while the pod may only use its CPU limit, so it is CFS-throttled most of the time. The model specs set `VLLM_CPU_OMP_THREADS_BIND=nobind` + `OMP_NUM_THREADS` below the limit; `./deploy.sh models` applies it (with one replica the rolling update needs room for a second model pod: `oc patch deploy qwen3-0-6b-kserve -n maas-models --type=merge -p '{"spec":{"strategy":{"rollingUpdate":{"maxUnavailable":1}}}}'`) |
 | Slow answers (> 60 s) | Qwen3-0.6B on CPU, ~4-5k prompt tokens per turn (system prompt + tool definitions + tool result). Answers with OpenAI models take a few seconds |
 | The answer ignores the tool / invents things | small-model limits: ask more directly ("call get_component_details for X"), or pick an OpenAI model. The tool outputs are short Markdown for this reason |
+| A long answer (the CI table) stops halfway | Qwen3-0.6B has an 8k context that holds the tools, the tool result, its reasoning and the answer. The tools keep their output compact and say `/no_think` at the end of their result; `VLLM_MAX_TOKENS` is 2048 |
+| `lightspeed test` / `ask`: `error executing command in container: signal: killed` | the Developer Hub operator replaced the pod (it can roll once more after `setup`). `ask` waits for the rollout and asks again once |
 | *MCP server ... is not configured* in the MCP settings | the name in `lightspeed.mcpServers` must match `mcp_servers[].name` in `lightspeed-stack.yaml` |

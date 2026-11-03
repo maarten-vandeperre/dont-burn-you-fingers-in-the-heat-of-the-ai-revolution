@@ -133,7 +133,7 @@ Needs `./deploy.sh app deploy` first (exposes the existing `orders-service`). De
 ./deploy.sh lightspeed setup     # MaaS tenant + key for Lightspeed, platform-mcp, Developer Hub wiring, end-to-end test
 OPENAI_API_KEY=sk-... ./deploy.sh lightspeed llm   # optional: OpenAI models next to Qwen in the model picker
 ./deploy.sh lightspeed ask "Which models are deployed in OpenShift AI?"
-./deploy.sh lightspeed test      # MCP endpoints + three demo questions
+./deploy.sh lightspeed test      # MCP endpoints + five demo questions
 ```
 The operator side (Developer Hub operator with its `lightspeed` flavour, OpenShift AI + MaaS, the
 MCP plugins) comes with `./deploy.sh stack`. Details: `docs/demos/13-developer-lightspeed.md`.

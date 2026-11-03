@@ -267,7 +267,9 @@ def tool_get_catalog_overview(_args):
         for d in rels(e, "dependsOn"):
             out.append(f"- {me} depends on {short(d)}")
     out.append("")
-    out.append("Ask for one component (e.g. 'details of coffee-shop') to see its CI, CD and runtime status.")
+    # Small models sometimes pick this tool for "which items ... and their pipeline status": say what to do next
+    out.append("This overview has NO pipeline / CI status. If the user asked about pipelines, CI or builds, "
+               "call get_catalog_ci_status now (no arguments) and answer with its table.")
     return "\n".join(out)
 
 
@@ -284,8 +286,11 @@ def find_entity(name):
     if exact:
         order = {"Component": 0, "Resource": 1, "API": 2, "System": 3}
         return sorted(exact, key=lambda e: order.get(e["kind"], 9))[0], []
-    near = [e["metadata"]["name"] for e in ents if norm(q) and (norm(q) in norm(e["metadata"]["name"]) or norm(e["metadata"]["name"]) in norm(q))]
-    return None, near
+    near = [e for e in ents if norm(q) and (norm(q) in norm(e["metadata"]["name"]) or norm(e["metadata"]["name"]) in norm(q))]
+    if len({e["metadata"]["name"] for e in near}) == 1:   # "model router project" -> model-router
+        order = {"Component": 0, "Resource": 1, "API": 2, "System": 3}
+        return sorted(near, key=lambda e: order.get(e["kind"], 9))[0], []
+    return None, [e["metadata"]["name"] for e in near]
 
 
 def ci_section(kid, ns, e):
@@ -440,7 +445,128 @@ def tool_get_component_details(args):
     return "\n".join(out)
 
 
+# ----------------------------------------------------------------------------- tool: CI of the catalog
+def run_state(p):
+    st, reason, _ = cond(p, "Succeeded")
+    return "Succeeded" if st == "True" else ("Running" if st in ("Unknown", None) else f"Failed ({reason})" if reason else "Failed")
+
+
+def tool_get_catalog_ci_status(_args):
+    """One row per component/resource: what the CI tab (Tekton plugin) of Developer Hub shows.
+
+    The Tekton CI tab is shown for entities annotated tekton.dev/cicd: "true" and lists the
+    PipelineRuns labelled backstage.io/kubernetes-id=<id> (or matching the
+    backstage.io/kubernetes-label-selector annotation). OpenShift Builds are not on that tab;
+    they are listed in a separate column so a missing pipeline is not mistaken for 'never built'.
+    """
+    ents = [e for e in catalog_entities() if e["kind"] in ("Component", "Resource")]
+    # Two cluster-wide lists instead of one query per entity
+    prs = k8s_items("/apis/tekton.dev/v1/pipelineruns")
+    builds = k8s_items("/apis/build.openshift.io/v1/builds")
+
+    def matches(labels, ann):
+        kid = ann.get("backstage.io/kubernetes-id")
+        if kid:
+            return labels.get("backstage.io/kubernetes-id") == kid
+        return False
+
+    rows, with_pipeline, idle = [], 0, {}
+    order = {"Component": 0, "Resource": 1}
+    for e in sorted(ents, key=lambda x: (order[x["kind"]], x["metadata"]["name"])):
+        md = e["metadata"]
+        ann = md.get("annotations", {}) or {}
+        kid = ann.get("backstage.io/kubernetes-id")
+        ns = ann.get("backstage.io/kubernetes-namespace")
+
+        pipeline = "N/A"
+        mine = [p for p in prs if matches(p["metadata"].get("labels", {}) or {}, ann)] if kid else []
+        if mine:
+            with_pipeline += 1
+            mine.sort(key=lambda p: p.get("status", {}).get("startTime") or p["metadata"].get("creationTimestamp", ""), reverse=True)
+            last = mine[0]
+            ok = sum(1 for p in mine if cond(p, "Succeeded")[0] == "True")
+            pipeline = f"{run_state(last)} ({last['metadata']['name']}, {ago(last.get('status', {}).get('startTime'))}, {ok}/{len(mine)} ok)"
+
+        build = "-"
+        if kid and ns:
+            bs = [b for b in builds if b["metadata"]["namespace"] == ns
+                  and (b["metadata"].get("labels", {}) or {}).get("buildconfig") == kid]
+            if bs:
+                bs.sort(key=lambda b: b["metadata"].get("creationTimestamp", ""), reverse=True)
+                st = bs[0].get("status", {})
+                build = f"{st.get('phase', '?')} ({bs[0]['metadata']['name']}, {ago(st.get('completionTimestamp') or st.get('startTimestamp'))})"
+        if pipeline == "N/A" and build == "-":
+            idle.setdefault(e["kind"], []).append(md["name"])
+        else:
+            rows.append(f"| {md['name']} | {e['kind']} | {pipeline} | {build} |")
+
+    # The instruction travels with the data: a 0.6B model follows it better than the system prompt
+    built = sum(1 for r in rows if not r.endswith("| - |"))
+    total = len(rows) + sum(len(v) for v in idle.values())
+    for kind, names in sorted(idle.items()):
+        rows.append(f"| {', '.join(names)} | {kind} | N/A | - |")
+    # The instruction travels with the data: a 0.6B model follows it better than the system prompt.
+    # The table is kept small (items without pipeline and build share one row): Qwen3's 8k context
+    # also has to hold its reasoning, and a long table got cut off.
+    out = [f"Copy the table and the last line below as your answer, verbatim, all {len(rows)} rows. /no_think", "",
+           "| Item | Kind | Pipeline (CI tab) | Last build |",
+           "|---|---|---|---|"] + rows + ["",
+           f"**{total} items: {with_pipeline} with a pipeline on their CI tab (N/A = no pipeline), "
+           f"{built} with an OpenShift build.** Ask for one item to get its links."]
+    return "\n".join(out)
+
+
+def tool_get_ci_status(args):
+    """CI status of ONE catalog item, with the links to its catalog page and its CI tab."""
+    name = str(args.get("name") or args.get("component") or "").strip()
+    if not name:
+        return "Please give the name of a catalog item, e.g. coffee-shop."
+    e, near = find_entity(name)
+    if not e:
+        hint = f" Did you mean: {', '.join(sorted(set(near))[:8])}?" if near else " Use get_catalog_ci_status to list the items."
+        return f"No catalog item named '{name}'.{hint}"
+    md = e["metadata"]
+    ann = md.get("annotations", {}) or {}
+    kid, ns = ann.get("backstage.io/kubernetes-id"), ann.get("backstage.io/kubernetes-namespace")
+    url = entity_url(e)
+    out = [f"Answer with the status and BOTH links below, keep the links exactly. /no_think", "",
+           f"# CI status of {md['name']} ({e['kind']})"]
+    if kid and e["kind"] in ("Component", "Resource"):
+        ci = ci_section(kid, ns, e)[1:]
+        if not any("Tekton pipeline" in l for l in ci):
+            ci.insert(0, "- Pipeline (CI tab): **N/A** (no Tekton pipeline runs for this item)")
+        out += ci
+    else:
+        out.append("- N/A: no CI (no kubernetes-id, so no builds or pipeline runs are linked to it).")
+    if url:
+        out += ["", f"- Catalog page: {url}"]
+        if ann.get("tekton.dev/cicd") == "true":
+            out.append(f"- CI tab (pipeline runs): {url}/ci")
+        else:
+            out.append(f"- CI tab: none (the item has no tekton.dev/cicd annotation); overview: {url}")
+    return "\n".join(out)
+
+
 TOOLS = [
+    {
+        "name": "get_ci_status",
+        "description": "CI / pipeline / build status of ONE catalog item (component or resource), with the direct links "
+                       "to its Developer Hub catalog page and its CI tab.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"name": {"type": "string", "description": "Catalog item name, e.g. coffee-shop"}},
+            "required": ["name"],
+        },
+        "fn": tool_get_ci_status,
+    },
+    {
+        "name": "get_catalog_ci_status",
+        "description": "CI / pipeline status of ALL items in the Developer Hub catalog in one table: per component "
+                       "and resource the Tekton pipeline status shown on its CI tab (N/A when it has no pipeline) "
+                       "and its last OpenShift build. Use for questions about pipelines, CI or builds of the catalog.",
+        "inputSchema": {"type": "object", "properties": {}},
+        "fn": tool_get_catalog_ci_status,
+    },
     {
         "name": "list_deployed_models",
         "description": "List the AI models deployed in OpenShift AI (model servers, status, runtime, "
@@ -452,7 +578,8 @@ TOOLS = [
         "name": "get_catalog_overview",
         "description": "Overview of the Developer Hub software catalog: domains, systems, components, APIs, "
                        "resources and how they depend on each other. Use for questions about the architecture, "
-                       "the catalog, or relations between components.",
+                       "the catalog, or relations between components. Not for pipeline, CI or build status "
+                       "(use get_catalog_ci_status or get_ci_status).",
         "inputSchema": {"type": "object", "properties": {}},
         "fn": tool_get_catalog_overview,
     },
