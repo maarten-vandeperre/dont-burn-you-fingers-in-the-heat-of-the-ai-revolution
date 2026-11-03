@@ -16,3 +16,16 @@ spec:
   oidcServer:
     tls:
       enabled: false
+  # The service CA, at the path deploy.sh points SSL_CERT_FILE / REQUESTS_CA_BUNDLE to. Authorino
+  # calls maas-api over TLS (API key validation, subscription selection); without this file it
+  # cannot verify maas-api's service-ca cert ("tls: bad certificate" in the maas-api log) and
+  # every MaaS API key is rejected with 403. Set on the CR so the operator keeps it.
+  volumes:
+    items:
+      - name: openshift-service-ca
+        mountPath: /etc/ssl/certs/openshift-service-ca
+        configMaps:
+          - openshift-service-ca.crt
+        items:
+          - key: service-ca.crt
+            path: service-ca-bundle.crt

@@ -182,10 +182,33 @@ render_llama_stack_config() {  # render_llama_stack_config <out-file>
     "${RHDH_DIR}/lightspeed/llama-stack-config.yaml" > "$1"
 }
 
+# Authorino validates MaaS API keys by calling maas-api over TLS. deploy.sh points SSL_CERT_FILE at
+# the service CA bundle; when that file is not mounted (Kuadrant rewrote the Authorino CR, or a
+# cluster set up before the mount existed) every API key gets 403 and maas-api logs
+# "tls: bad certificate". Same fix as deploy.sh authorino_tls_env, so `lightspeed setup` heals it.
+AUTHORINO_CA_DIR=/etc/ssl/certs/openshift-service-ca
+heal_authorino_ca() {
+  if oc exec -n kuadrant-system deploy/authorino -- test -s "${AUTHORINO_CA_DIR}/service-ca-bundle.crt" 2>/dev/null; then
+    ok "Authorino trusts the service CA (MaaS API key validation)"; return 0
+  fi
+  warn "Authorino has no service CA bundle (MaaS API keys would get 403): mounting it via the Authorino CR"
+  oc patch authorino authorino -n kuadrant-system --type=merge -p "{\"spec\":{\"volumes\":{\"items\":[{\"name\":\"openshift-service-ca\",\"mountPath\":\"${AUTHORINO_CA_DIR}\",\"configMaps\":[\"openshift-service-ca.crt\"],\"items\":[{\"key\":\"service-ca.crt\",\"path\":\"service-ca-bundle.crt\"}]}]}}}" >/dev/null
+  if ! oc get deployment authorino -n kuadrant-system -o jsonpath='{.spec.template.spec.containers[0].env}' | grep SSL_CERT_FILE >/dev/null; then
+    oc -n kuadrant-system set env deployment/authorino \
+      SSL_CERT_FILE="${AUTHORINO_CA_DIR}/service-ca-bundle.crt" REQUESTS_CA_BUNDLE="${AUTHORINO_CA_DIR}/service-ca-bundle.crt" >/dev/null
+  fi
+  wait_until 300 "Authorino restarted with the service CA bundle" \
+    oc exec -n kuadrant-system deploy/authorino -- test -s "${AUTHORINO_CA_DIR}/service-ca-bundle.crt" \
+    || die "Authorino still has no ${AUTHORINO_CA_DIR}/service-ca-bundle.crt: oc get authorino authorino -n kuadrant-system -o yaml"
+  oc rollout status deploy/authorino -n kuadrant-system --timeout=300s >/dev/null || true
+  ok "Authorino trusts the service CA"
+}
+
 setup_llm() {
   resolve_models
   step "LLM: Developer Lightspeed as a MaaS tenant (default ${MODEL}, models: ${MODELS[*]})"
   heal_maas_gateway
+  heal_authorino_ca
   oc apply -f "${LS_DIR}/maas/subscription.yaml" >/dev/null
   # one subscription (so one API key) for all models, same token budget per model
   local refs
@@ -206,7 +229,8 @@ setup_llm() {
       -d "{\"name\":\"developer-lightspeed\",\"subscription\":\"${SUB}\",\"expiresIn\":\"720h\"}")
     key=$(jq -r '.key // empty' <<<"$resp" 2>/dev/null || true)
     [[ -n "$key" ]] || die "could not mint a MaaS API key for ${LS_SA}: $(jq -c 'del(.key)' <<<"$resp" 2>/dev/null || echo "$resp" | head -c 300)"
-    wait_until 60 "new MaaS API key accepted by the gateway" key_works "$key" || die "the new key is rejected (check: oc get maassubscription ${SUB} -n models-as-a-service -o yaml)"
+    wait_until 120 "new MaaS API key accepted by the gateway" key_works "$key" \
+      || die "the new key is rejected (check: oc get maassubscription ${SUB} -n models-as-a-service -o yaml, oc logs -n kuadrant-system deploy/authorino)"
     ok "MaaS API key minted as system:serviceaccount:${NS}:${LS_SA} (subscription ${SUB}, 30 days)"
   fi
 

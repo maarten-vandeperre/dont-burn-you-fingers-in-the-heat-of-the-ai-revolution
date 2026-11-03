@@ -553,13 +553,14 @@ def tool_get_ci_status(args):
 TOOLS = [
     {
         "name": "get_ci_status",
-        "description": "CI / pipeline / build status from the Developer Hub CI tab. Without a name: a summary table "
-                       "of ALL catalog items (N/A when an item has no pipeline). With a name: that one item, with "
-                       "the links to its catalog page and its CI tab. Use for every CI, pipeline or build question.",
+        "description": "Pipeline / CI / build status of ALL catalog items (Developer Hub CI tab), as one table "
+                       "with N/A for items without a pipeline. Call it with NO arguments for the catalog, all "
+                       "items or 'my' statuses. Only for one named item pass its name: then it also gives the "
+                       "links to its catalog page and CI tab. Use for every CI, pipeline or build question.",
         "inputSchema": {
             "type": "object",
             "properties": {"name": {"type": "string",
-                                    "description": "Optional catalog item name, e.g. coffee-shop. Leave out for all items."}},
+                                    "description": "Optional: one catalog item name, e.g. coffee-shop. Omit it for all items."}},
         },
         "fn": tool_get_ci_status,
     },

@@ -438,6 +438,16 @@ authorino_tls_env() {
       REQUESTS_CA_BUNDLE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt >/dev/null
     ok "Authorino configured to trust the service CA"
   fi
+  # SSL_CERT_FILE alone is not enough: the file must be mounted, or Authorino cannot verify
+  # maas-api (API key validation) and every MaaS API key gets 403. Set on the Authorino CR (the
+  # operator owns the Deployment); re-checked here because Kuadrant may rewrite that CR.
+  if [[ "$(oc get authorino authorino -n kuadrant-system -o jsonpath='{.spec.volumes.items[*].mountPath}' 2>/dev/null)" != *openshift-service-ca* ]]; then
+    oc patch authorino authorino -n kuadrant-system --type=merge -p '{"spec":{"volumes":{"items":[{"name":"openshift-service-ca","mountPath":"/etc/ssl/certs/openshift-service-ca","configMaps":["openshift-service-ca.crt"],"items":[{"key":"service-ca.crt","path":"service-ca-bundle.crt"}]}]}}}' >/dev/null
+    ok "Authorino: service CA bundle mounted at /etc/ssl/certs/openshift-service-ca"
+  fi
+  wait_until 300 "Authorino pod has the service CA bundle" \
+    oc exec -n kuadrant-system deploy/authorino -- test -s /etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt \
+    || warn "Authorino has no service CA bundle: MaaS API keys will be rejected (403)"
 }
 
 maas_api_glue() {
