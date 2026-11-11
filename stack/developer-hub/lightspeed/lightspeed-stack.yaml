@@ -1,17 +1,25 @@
-# Lightspeed Core Service (LCS) configuration of the lightspeed-core sidecar, mounted by the
-# Backstage CR over the operator's default /app-root/lightspeed-stack.yaml (extraFiles, container
-# lightspeed-core). Identical to the RHDH 1.10 operator default, plus one MCP server:
+# Lightspeed Core Service (LCS) configuration of the lightspeed-core sidecar (intelligent assistant,
+# Developer Hub 2.1), mounted by the Backstage CR over the operator's default
+# /app-root/lightspeed-stack.yaml (extraFiles, container lightspeed-core).
 #
+# 2.1 format: LCS runs its inference stack embedded ("baseline: byo-llm") and the LLMs are listed
+# under inference.providers. There is no separate Llama Stack config.yaml any more (1.x), and the
+# ENABLE_VLLM / ENABLE_OPENAI flags are gone: a provider exists when it is listed here.
+#
+# This is a TEMPLATE: ./deploy.sh lightspeed setup renders it into ConfigMap lightspeed-stack-config
+# and inserts at the @llm-providers@ marker:
+#   vllm            the default MaaS model (VLLM_URL / VLLM_API_KEY of Secret lightspeed-secrets)
+#   vllm-<model>    one provider per other model OpenShift AI serves through MaaS (same key)
+#   openai          only when OPENAI_API_KEY was exported for setup/llm
+#
+# MCP servers:
 #   mcp-integration-tools  Developer Hub's own MCP endpoint (mcp-actions-backend plugin), its compact
 #                          "lightspeed" server: software-catalog-mcp-extras only (8k-context model).
-#                          /api/mcp-actions/v1/backstage has all 19 tools, for bigger models
+#                          /api/mcp-actions/v1/backstage has all tools, for bigger models
 #   platform-tools         platform-mcp (stack/lightspeed/mcp-server): deployed OpenShift AI models,
 #                          catalog overview/relations, CI/CD/runtime status per component
-#
-# "Authorization: client" = the token comes from the caller: the Lightspeed backend plugin sends
-# the per-server token of lightspeed.mcpServers (app-config-lightspeed) in the MCP-HEADERS header.
-# The LLM itself is configured in the Llama Stack config (operator default, /app-root/config.yaml)
-# through the env vars of Secret lightspeed-secrets (ENABLE_VLLM, VLLM_URL, VLLM_API_KEY, ...).
+# "Authorization: client" = the token comes from the caller: the intelligent-assistant backend sends
+# the per-server token of intelligent-assistant.mcpServers (app-config-lightspeed) in MCP-HEADERS.
 name: lightspeed-core-stack
 service:
   host: ${env.SERVICE_HOST:=127.0.0.1}
@@ -22,7 +30,29 @@ service:
   access_log: true
 llama_stack:
   use_as_library_client: true
-  library_client_config_path: /app-root/config.yaml
+  config:
+    baseline: byo-llm
+    native_override:
+      vector_stores:
+        annotation_prompt_params:
+          enable_annotations: true
+          annotation_instruction_template: >
+            When appropriate, cite sources at the end of sentences using doc_url and doc_title format.
+            Citing sources is not always required because citations are handled externally.
+            Never include any citation that is in the form '<| file-id |>'.
+inference:
+  providers:
+    - type: sentence_transformers
+    # @llm-providers@
+vector_store:
+  default_provider: notebooks
+  providers:
+    - id: notebooks
+      type: faiss
+      embedding_model: nomic-ai/nomic-embed-text-v1.5
+      embedding_dimension: 768
+      config:
+        path: /tmp/vector_db/notebooks/faiss_store.db
 user_data_collection:
   feedback_enabled: true
   feedback_storage: '/tmp/data/feedback'
@@ -34,6 +64,9 @@ conversation_cache:
     db_path: '/tmp/cache.db'
 customization:
   profile_path: '/app-root/rhdh-profile.py'
+skills:
+  paths:
+    - /app-root/skills
 mcp_servers:
   - name: mcp-integration-tools
     provider_id: 'model-context-protocol'

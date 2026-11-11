@@ -1,0 +1,19 @@
+# Default OpenShift GitOps instance, partial object (server-side apply only sets this field):
+# a Deployment that uses an OpenShift image trigger (annotation image.openshift.io/triggers) gets
+# its container image written by OpenShift after every build (the digest of the ImageStreamTag).
+# Git says "<name>:latest", so Argo CD would show it OutOfSync and self-heal would fight the
+# trigger. Ignore the image of exactly those Deployments, e.g. the apps of the Developer Hub
+# "LLM application" template (argocd:create-resources, automated sync + self-heal).
+apiVersion: argoproj.io/v1beta1
+kind: ArgoCD
+metadata:
+  name: openshift-gitops
+  namespace: openshift-gitops
+spec:
+  resourceIgnoreDifferences:
+    resourceIdentifiers:
+      - group: apps
+        kind: Deployment
+        customization:
+          jqPathExpressions:
+            - 'select(.metadata.annotations["image.openshift.io/triggers"] != null) | .spec.template.spec.containers[].image'

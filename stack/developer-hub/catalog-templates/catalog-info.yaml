@@ -10,6 +10,7 @@ spec:
     - ./models.yaml
     - ./ai-demo.yaml
     - ./apis.yaml
+    - ./ai-assets.yaml
     - ./argo-rollouts-demo.yaml
     - ./template-traffic-pattern.yaml
     - ./template-model-router-rollout.yaml

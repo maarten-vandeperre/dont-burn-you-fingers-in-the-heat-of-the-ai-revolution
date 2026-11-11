@@ -1,0 +1,164 @@
+# AI assets of the platform for the AI Catalog (Developer Hub 2.1, /ai-catalog, Developer Preview).
+# The AI Catalog shows:
+#   AiModelServerAPI (type ai-model-server)  the models OpenShift AI serves: created by the
+#                                             OpenShift AI connector, NOT in this file
+#   API (type mcp-server)                     MCP servers agents can connect to (below)
+#   AiResource (type skill | rule | agent)    reusable agent know-how and guardrails (below)
+# Schemas: @backstage/catalog-model alpha kinds (API mcp-server, AiResource skill/rule) and the RHDH
+# ai-resource-extensions / ai-resource-agent catalog modules (spec.scope, agents).
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: ai-tooling
+  title: AI tooling
+  description: MCP servers, skills, rules and agents for AI coding tools and the intelligent assistant
+spec:
+  owner: platform-team
+  domain: ai-platform
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: developer-hub-mcp
+  title: Developer Hub MCP server
+  description: >-
+    Developer Hub as an MCP server (mcp-actions-backend): software catalog, TechDocs, software
+    templates, Kubernetes resources per entity and Scorecard metrics as MCP tools. Static token
+    (MCP_TOKEN in rhdh/rhdh-secrets) or OAuth through the agent-friendly CLI.
+  tags: [mcp, ai, developer-hub]
+  links:
+    - {url: "https://backstage-developer-hub-rhdh.__APPS_DOMAIN__/api/mcp-actions/v1/backstage", title: MCP endpoint (all tools)}
+spec:
+  type: mcp-server
+  lifecycle: experimental
+  owner: platform-team
+  system: ai-tooling
+  remotes:
+    - type: streamable-http
+      url: https://backstage-developer-hub-rhdh.__APPS_DOMAIN__/api/mcp-actions/v1/backstage
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: developer-hub-mcp-compact
+  title: Developer Hub MCP server (compact)
+  description: >-
+    Catalog query tools only, small enough for 8k-context models. The intelligent assistant uses
+    this one with Qwen3-0.6B.
+  tags: [mcp, ai, developer-hub]
+spec:
+  type: mcp-server
+  lifecycle: experimental
+  owner: platform-team
+  system: ai-tooling
+  remotes:
+    - type: streamable-http
+      url: https://backstage-developer-hub-rhdh.__APPS_DOMAIN__/api/mcp-actions/v1/lightspeed
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: platform-mcp
+  title: Platform MCP server
+  description: >-
+    The platform's own MCP server (stack/lightspeed/mcp-server): deployed OpenShift AI models,
+    catalog overview and relations, CI/CD and runtime status per component.
+  tags: [mcp, ai, openshift-ai]
+  annotations:
+    backstage.io/source-location: url:https://__GITLAB_HOST__/ai-platform/platform/-/tree/main/stack/lightspeed/mcp-server/
+spec:
+  type: mcp-server
+  lifecycle: experimental
+  owner: platform-team
+  system: ai-tooling
+  remotes:
+    - type: streamable-http
+      url: http://platform-mcp.rhdh.svc:8080/mcp
+---
+apiVersion: backstage.io/v1alpha1
+kind: AiResource
+metadata:
+  name: catalog-explore
+  title: Explore the software catalog
+  description: >-
+    Skill for coding agents: before writing code, map domains and systems, read the governance
+    TechDocs, find existing integration points and pick the right software template through the
+    Developer Hub CLI (rhdh-cli / backstage-cli actions) or the Developer Hub MCP server.
+  tags: [skill, catalog, agent-ready]
+  annotations:
+    backstage.io/source-location: url:https://__GITLAB_HOST__/ai-platform/platform/-/tree/main/stack/developer-hub/
+spec:
+  type: skill
+  lifecycle: experimental
+  owner: platform-team
+  system: ai-tooling
+  scope: organization
+  disciplines: [software-engineering]
+  categories: [discovery, governance]
+  agents: [claude-code, cursor, intelligent-assistant]
+---
+apiVersion: backstage.io/v1alpha1
+kind: AiResource
+metadata:
+  name: use-maas-models
+  title: Call models through MaaS or the model-router
+  description: Applications reach LLMs through Models-as-a-Service (API key, token quota) or the model-router, never directly.
+  tags: [rule, governance, models]
+spec:
+  type: rule
+  lifecycle: production
+  owner: platform-team
+  system: ai-tooling
+  scope: organization
+  disciplines: [backend]
+  category: architecture
+  rationale: >-
+    One gateway gives token quotas per subscription, usage metrics, tracing and a single place to
+    swap or add models (MaaS free/premium tiers, OpenAI fallback in the model-router). Direct calls
+    to a vLLM pod or an external provider bypass all of that.
+---
+apiVersion: backstage.io/v1alpha1
+kind: AiResource
+metadata:
+  name: deploy-with-gitops
+  title: Deploy through Argo CD
+  description: New services are deployed by an Argo CD Application created by a software template, not by hand.
+  tags: [rule, governance, gitops]
+spec:
+  type: rule
+  lifecycle: production
+  owner: platform-team
+  system: ai-tooling
+  scope: organization
+  disciplines: [backend, devops]
+  category: delivery
+  rationale: >-
+    Git stays the source of truth: every change is reviewed, auditable and reproducible, and the
+    Developer Hub Argo CD tab shows sync and health for every component.
+---
+apiVersion: backstage.io/v1alpha1
+kind: AiResource
+metadata:
+  name: platform-assistant
+  title: Platform assistant agent
+  description: >-
+    Agent that answers questions about this platform from live data: deployed models, catalog
+    relations, CI/CD status and Kubernetes state, through the Developer Hub and platform MCP servers.
+  tags: [agent, assistant]
+spec:
+  type: agent
+  lifecycle: experimental
+  owner: platform-team
+  system: ai-tooling
+  scope: organization
+  model: qwen3-0-6b
+  instructions: >-
+    You are the platform assistant of the OpenShift AI platform. Always call a tool before you
+    answer: list_deployed_models for models, get_catalog_overview / get_component_details for the
+    catalog, get_ci_status for pipelines. Answer briefly in Markdown, only with facts from the tools.
+  tools:
+    - api:default/developer-hub-mcp
+    - api:default/platform-mcp
+  modelSettings:
+    temperature: 0.2
+    maxTokens: 1024

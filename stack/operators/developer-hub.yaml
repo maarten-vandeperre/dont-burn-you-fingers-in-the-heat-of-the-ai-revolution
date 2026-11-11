@@ -17,7 +17,10 @@ metadata:
   name: rhdh
   namespace: rhdh-operator
 spec:
-  channel: fast
+  # Developer Hub 2.1 (fast-2.1). "fast" stays on the 1.10 line. The 2.1 operator moves the local
+  # database from PostgreSQL 15 to 18: an existing 1.x install needs a dump/restore, see
+  # docs/demos/14-developer-hub-2.1.md ("Upgrading from 1.10").
+  channel: fast-2.1
   installPlanApproval: Automatic
   name: rhdh
   source: redhat-operators

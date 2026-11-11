@@ -5,7 +5,7 @@ complete AI and application platform. Every layer can be installed with `oc` or 
 
 | Area | What gets installed and configured | Where to look |
 |---|---|---|
-| OpenShift AI 3.4 | Operator (`stable-3.4`), lean DataScienceCluster, dashboard, workbenches, KServe | console app launcher |
+| OpenShift AI 3.4 | Operator (`stable-3.4`), lean DataScienceCluster, dashboard, workbenches, KServe, model registry (`platform-registry`) and model catalog with a "Platform models" source (model cards of the served models) | console app launcher |
 | MLflow | `mlflowoperator` component + cluster `MLflow` instance (SQLite + PVC, dev sizing) | OpenShift AI > Applications > MLflow UI |
 | Gen AI studio playground | `llamastackoperator` + `genAiStudio`, plus a ready-made playground with both models in project `ai-tenants` | OpenShift AI > Gen AI studio > Playground |
 | Models-as-a-Service | Kuadrant, MaaS gateway, PostgreSQL, free/premium subscriptions, API keys | `https://maas.<apps-domain>/v1` |
@@ -14,12 +14,12 @@ complete AI and application platform. Every layer can be installed with `oc` or 
 | MaaS observability | RHOAI monitoring stack, token metrics per model/subscription | `./deploy.sh usage` |
 | Kafka + Debezium | Streams for Apache Kafka (KRaft), Kafka Connect with the Debezium PostgreSQL connector, demo database | `./deploy.sh cdc-demo` |
 | Service Mesh | OpenShift Service Mesh 3 (Istio + CNI), mesh-wide tracing, Kiali, Bookinfo demo with traffic | Kiali route |
-| Developer Hub | RHDH with the full platform catalog, APIs, Kubernetes / Topology / Tekton / Argo CD views, source links to GitLab, platform templates and the "LLM application" project template (`app/software-templates`) | Developer Hub route |
+| Developer Hub 2.1 | RHDH 2.1 (new frontend system) with the full platform catalog, APIs, Kubernetes / Topology / Tekton / Argo CD views, Scorecard, source links to GitLab, platform templates and the "LLM application" project template (model picker, TechDocs, Argo CD deployment). Agent-ready: AI Catalog with the models of OpenShift AI (OpenShift AI connector, model cards from the OpenShift AI model catalog), MCP servers, skills, rules and agents; MCP tools for catalog, TechDocs, templates, Kubernetes and Scorecard; agent-friendly CLI login. Demo: `docs/demos/14-developer-hub-2.1.md` | Developer Hub route |
 | Single sign-on | Red Hat build of Keycloak, realm `demo`, one user (`admin` / `redhatdemo`) for Developer Hub and GitLab | Keycloak route `/admin` |
 | GitLab | GitLab CE with the whole repository (`ai-platform/platform`), Keycloak sign-in, registered in Argo CD | GitLab route |
 | Argo CD + Argo Rollouts | OpenShift GitOps (default instance) + cluster-scoped Argo Rollouts | Argo CD route |
 | Tekton | OpenShift Pipelines | console > Pipelines |
-| Developer Lightspeed | Red Hat Developer Lightspeed in Developer Hub (operator `lightspeed` flavour + MCP plugins), on every model OpenShift AI serves through MaaS (one API key, model picker), with MCP tools for deployed OpenShift AI models, catalog relations and CI/CD/runtime status per component | `./deploy.sh lightspeed` |
+| Intelligent assistant | The Developer Hub assistant (formerly Developer Lightspeed; operator `intelligent-assistant` flavour + MCP plugins), on every model OpenShift AI serves through MaaS (one API key, model picker), with MCP tools for deployed OpenShift AI models, catalog relations and CI/CD/runtime status per component | `./deploy.sh lightspeed` |
 | Connectivity | Red Hat Service Interconnect (cross-network DB link, no VPN) + a Connectivity Link (Kuadrant) Dev Portal demo: self-service API keys, approval workflow, plan-tiered rate limits | `./deploy.sh connectivity` |
 
 ```bash
@@ -136,8 +136,10 @@ OPENAI_API_KEY=sk-... ./deploy.sh lightspeed llm   # optional: OpenAI models nex
 ./deploy.sh lightspeed ask "Which models are deployed in OpenShift AI?"
 ./deploy.sh lightspeed test      # MCP endpoints + six demo questions
 ```
-The operator side (Developer Hub operator with its `lightspeed` flavour, OpenShift AI + MaaS, the
-MCP plugins) comes with `./deploy.sh stack`. Details: `docs/demos/13-developer-lightspeed.md`.
+The operator side (Developer Hub 2.1 operator with its `intelligent-assistant` flavour, OpenShift AI
++ MaaS, the MCP plugins) comes with `./deploy.sh stack`. Details: `docs/demos/13-developer-lightspeed.md`;
+the Developer Hub 2.1 features (AI Catalog, MCP tools from plugins, agent-friendly CLI, the extended
+LLM application template): `docs/demos/14-developer-hub-2.1.md`.
 
 ### 3. Check everything
 
@@ -211,11 +213,12 @@ Templates write through a Developer Hub proxy (`/platform-actions`) with the sep
 `rhdh-platform-actions` token, which may only patch VirtualServices, Rollouts and replicas in
 `ai-demo`, and the replicas of the models in `maas-models`. Nothing else is writable from the portal.
 
-Plugins are version dependent (bundled paths up to 1.9, OCI artifacts afterwards), so the script
-reads the `dynamic-plugins.default.yaml` of the running Developer Hub and enables Kubernetes,
-Topology, Tekton, Argo CD and the HTTP request and Kubernetes scaffolder actions from there. A
-plugin the installed version does not offer is reported and skipped. With Argo CD, commit the
-generated `stack/developer-hub/catalog/` and `dynamic-plugins.yaml`.
+Plugins are pinned per Developer Hub release in `stack/developer-hub/dynamic-plugins.yaml`
+(curated for 2.1): supported plugins as `ref://<name>` (resolved against the catalog index of the
+running release), community and Developer Preview plugins as
+`oci://ghcr.io/redhat-developer/rhdh-plugin-export-overlays/<name>:bs_1.54.9__<version>` (the `bs_`
+tag must match the Backstage version of the release). `./deploy.sh rhdh` warns when the operator
+runs another release. With Argo CD, commit the rendered `stack/developer-hub/catalog/`.
 
 Demo shortcuts, not production settings: guest sign-in (configure OIDC / Keycloak and the RBAC
 plugin before sharing), `NODE_TLS_REJECT_UNAUTHORIZED=0` for the in-cluster Argo CD and API
@@ -301,7 +304,7 @@ minutes on first start), then `./deploy.sh rhdh`.
 | `./deploy.sh wait` | Restarts crash-looping model pods and waits for the models and their MaaS registration |
 | `./deploy.sh hf-check` | Checks that the Hugging Face token may download Gemma, and explains the fix for its token type |
 | `./deploy.sh rhdh-plugins [words]` | Lists the plugin packages this Developer Hub offers, e.g. `./deploy.sh rhdh-plugins tekton argo` |
-| `./deploy.sh rhdh` | Re-renders the catalog, rewires tokens and enables the plugins found, then restarts Developer Hub |
+| `./deploy.sh rhdh` | Re-renders the catalog, rewires tokens, applies the curated plugin list (`stack/developer-hub/dynamic-plugins.yaml`), then restarts Developer Hub |
 | `./deploy.sh sso` / `gitlab` | Installs or updates Keycloak and GitLab / pushes the repository into GitLab and registers it with Argo CD |
 | `./deploy.sh playground` | Re-creates the playground MaaS key and the ready-made playground in `ai-tenants` |
 | `./deploy.sh dashboards` | Data for the OpenShift AI observability dashboard (Perses datasource and COO 1.5 workarounds) |
@@ -335,7 +338,7 @@ argocd/                    Application templates (MaaS, observability, stack) + 
 app/                       demo applications (Quarkus, React, Camel, LangChain4j) + deploy/ + demo.sh
   deploy/rollouts-demo/    standalone Argo Rollouts tutorial: 4 strategies, AnalysisTemplate, Tekton pipeline
 stack/lightspeed/          Developer Lightspeed: MaaS subscription, platform-mcp MCP server, lightspeed.sh (./deploy.sh lightspeed)
-stack/developer-hub/lightspeed/  app-config-lightspeed (MCP endpoints /v1/backstage + /v1/lightspeed), Lightspeed Core + Llama Stack config
+stack/developer-hub/lightspeed/  app-config-lightspeed (MCP endpoints /v1/backstage + /v1/lightspeed), Lightspeed Core config (LLM providers + MCP servers)
 stack/connectivity/        Service Interconnect (legacy DB) + Connectivity Link partner API demo (./deploy.sh connectivity)
 docs/demos/                short demo guides
 deploy.sh

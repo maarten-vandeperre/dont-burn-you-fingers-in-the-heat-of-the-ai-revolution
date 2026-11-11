@@ -21,18 +21,19 @@
 #      load after a cluster restart (every MaaS call answers 503 "wasm_fail_stream").
 #   2. LLM: Developer Lightspeed becomes a MaaS tenant: ServiceAccount rhdh/developer-lightspeed,
 #      MaaSSubscription developer-lightspeed (200k tokens/min on EVERY model served through MaaS),
-#      ONE API key minted with that identity, Secret rhdh/lightspeed-secrets (ENABLE_VLLM, VLLM_URL,
-#      VLLM_API_KEY, ...) for the default model, and ConfigMap lightspeed-llama-stack-config: one
-#      extra Llama Stack provider vllm-<model> per other model, with that same key. All of them show
-#      up in the model picker of the chat. OPENAI_API_KEY (exported before setup/llm) adds OpenAI.
+#      ONE API key minted with that identity, Secret rhdh/lightspeed-secrets (VLLM_URL, VLLM_API_KEY,
+#      ...) for the default model, and in ConfigMap lightspeed-stack-config (Developer Hub 2.1
+#      format, inference.providers) one provider vllm-<model> per other model, with that same key.
+#      All of them show up in the model picker of the chat. OPENAI_API_KEY (exported before
+#      setup/llm) adds OpenAI.
 #   3. MCP: Developer Hub's MCP endpoint (mcp-actions-backend + software-catalog-mcp-extras plugins,
 #      static MCP_TOKEN) and platform-mcp (stack/lightspeed/mcp-server): deployed models, catalog
 #      overview and relations, CI/CD/runtime status per component.
-#   4. Developer Hub: app-config-lightspeed + lightspeed-stack-config ConfigMaps, the two MCP
-#      plugins in dynamic-plugins-rhdh, the Backstage CR mounts them into the lightspeed-core
-#      sidecar (operator "lightspeed" flavour), rollout, then `test`.
+#   4. Developer Hub: app-config-lightspeed + lightspeed-stack-config ConfigMaps, the MCP plugins
+#      in dynamic-plugins-rhdh, the Backstage CR mounts them into the lightspeed-core sidecar
+#      (operator "intelligent-assistant" flavour, "lightspeed" before 2.1), rollout, then `test`.
 #
-# Needs: the platform stack (./deploy.sh stack: Developer Hub operator with the lightspeed flavour,
+# Needs: the platform stack (./deploy.sh stack: Developer Hub 2.1 operator, intelligent-assistant flavour,
 # OpenShift AI + MaaS with qwen3-0-6b). Demo guide: docs/demos/13-developer-lightspeed.md
 #
 # Environment
@@ -162,24 +163,42 @@ resolve_models() {
   return 0
 }
 
-# Llama Stack config of the sidecar: the operator default (git) + one vllm-<model> provider per
-# extra model, inserted at the @maas-models@ marker. Same key and limits as the default provider.
-render_llama_stack_config() {  # render_llama_stack_config <out-file>
-  local providers="" m
+# Lightspeed Core config of the sidecar (Developer Hub 2.1 format): the template in git + the LLM
+# providers, inserted at the @llm-providers@ marker. The default model is provider "vllm" (VLLM_URL
+# of lightspeed-secrets), every other MaaS model gets its own provider vllm-<model> with the same
+# key and limits, and OpenAI is added when lightspeed-secrets holds an OPENAI_API_KEY.
+render_lightspeed_stack_config() {  # render_lightspeed_stack_config <out-file>
+  local providers m
+  providers="    - type: vllm
+      id: vllm
+      api_key_env: VLLM_API_KEY
+      extra:
+        base_url: \${env.VLLM_URL:=}
+        max_tokens: \${env.VLLM_MAX_TOKENS:=2048}
+        network:
+          tls:
+            verify: \${env.VLLM_TLS_VERIFY:=true}
+"
   for m in "${MODELS[@]:1}"; do
-    providers+="    - provider_id: vllm-${m}
-      provider_type: remote::vllm
-      config:
+    providers+="    - type: vllm
+      id: vllm-${m}
+      api_key_env: VLLM_API_KEY
+      extra:
         base_url: https://$(maas_host)/${MODELS_NS}/${m}/v1
-        api_token: \${env.VLLM_API_KEY:=}
-        max_tokens: \${env.VLLM_MAX_TOKENS:=4096}
+        max_tokens: \${env.VLLM_MAX_TOKENS:=2048}
         network:
           tls:
             verify: \${env.VLLM_TLS_VERIFY:=true}
 "
   done
-  PROVIDERS="$providers" awk '/# @maas-models@/ {print; printf "%s", ENVIRON["PROVIDERS"]; next} {print}' \
-    "${RHDH_DIR}/lightspeed/llama-stack-config.yaml" > "$1"
+  if [[ -n "$(secret_value "$NS" lightspeed-secrets OPENAI_API_KEY)" ]]; then
+    providers+="    - type: openai
+      id: openai
+      api_key_env: OPENAI_API_KEY
+"
+  fi
+  PROVIDERS="$providers" awk '/# @llm-providers@/ {print; printf "%s", ENVIRON["PROVIDERS"]; next} {print}' \
+    "${RHDH_DIR}/lightspeed/lightspeed-stack.yaml" > "$1"
 }
 
 # Authorino validates MaaS API keys by calling maas-api over TLS. deploy.sh points SSL_CERT_FILE at
@@ -235,15 +254,17 @@ setup_llm() {
   fi
 
   openai="${OPENAI_API_KEY:-}"
-  # ENABLE_* must be absent (not "false") to disable a provider in the Llama Stack config
-  local args=(--from-literal=ENABLE_VLLM=true
-              --from-literal=VLLM_URL="https://$(maas_host)/${MODELS_NS}/${MODEL}/v1"
+  # Developer Hub 2.1: a provider exists when lightspeed-stack.yaml lists it (no ENABLE_* flags);
+  # render_lightspeed_stack_config adds the openai provider when OPENAI_API_KEY is in this Secret
+  local args=(--from-literal=VLLM_URL="https://$(maas_host)/${MODELS_NS}/${MODEL}/v1"
               --from-literal=VLLM_API_KEY="$key"
               --from-literal=VLLM_TLS_VERIFY=true
               --from-literal=VLLM_MAX_TOKENS=2048)
-  [[ -n "$openai" ]] && args+=(--from-literal=ENABLE_OPENAI=true --from-literal=OPENAI_API_KEY="$openai")
+  [[ -n "$openai" ]] && args+=(--from-literal=OPENAI_API_KEY="$openai")
+  # replace (not merge): keys of older releases (ENABLE_VLLM, ...) must not linger
   oc create secret generic lightspeed-secrets -n "$NS" "${args[@]}" --dry-run=client -o yaml \
-    | oc apply --server-side --force-conflicts --field-manager=lightspeed -f - >/dev/null
+    | oc replace -f - >/dev/null 2>&1 \
+    || oc create secret generic lightspeed-secrets -n "$NS" "${args[@]}" >/dev/null
   ok "Secret ${NS}/lightspeed-secrets: vLLM provider -> https://$(maas_host)/${MODELS_NS}/${MODEL}/v1$([[ -n "$openai" ]] && echo ', OpenAI provider enabled' || echo ' (no OPENAI_API_KEY: MaaS only)')"
 
   local m
@@ -299,17 +320,17 @@ patch_backstage_cr() {
     .appConfig.configMaps = ((.appConfig.configMaps // []) | if any(.name == "app-config-lightspeed") then . else . + [{"name":"app-config-lightspeed"}] end)
     | .extraEnvs.secrets = ((.extraEnvs.secrets // []) | if any(.name == "lightspeed-secrets") then . else . + [{"name":"lightspeed-secrets","containers":["lightspeed-core"]}] end)
     | .extraFiles.configMaps = ((.extraFiles.configMaps // []) | if any(.name == "lightspeed-stack-config") then . else . + [{"name":"lightspeed-stack-config","key":"lightspeed-stack.yaml","mountPath":"/app-root","containers":["lightspeed-core"]}] end)
-    | .extraFiles.configMaps = (.extraFiles.configMaps | if any(.name == "lightspeed-llama-stack-config") then . else . + [{"name":"lightspeed-llama-stack-config","key":"config.yaml","mountPath":"/app-root","containers":["lightspeed-core"]}] end)
+    | .extraFiles.configMaps |= map(select(.name != "lightspeed-llama-stack-config"))   # 1.x only
   ' <<<"$spec")
   if [[ "$(jq -S . <<<"$spec")" == "$(jq -S . <<<"$new")" ]]; then
     ok "Backstage CR already wired for Lightspeed"; return 1
   fi
   oc patch backstage "$CR" -n "$NS" --type=merge -p "{\"spec\":{\"application\":${new}}}" >/dev/null
-  ok "Backstage CR: app-config-lightspeed, lightspeed-secrets, lightspeed-stack-config and lightspeed-llama-stack-config -> lightspeed-core"
+  ok "Backstage CR: app-config-lightspeed, lightspeed-secrets and lightspeed-stack-config -> lightspeed-core"
 }
 
 rhdh_config_hash() {
-  oc get cm app-config-lightspeed lightspeed-stack-config lightspeed-llama-stack-config dynamic-plugins-rhdh -n "$NS" -o json \
+  oc get cm app-config-lightspeed lightspeed-stack-config dynamic-plugins-rhdh -n "$NS" -o json \
     | jq -c '[.items[].data]' | cksum | cut -d' ' -f1
   secret_value "$NS" lightspeed-secrets VLLM_URL | cksum | cut -d' ' -f1
 }
@@ -343,16 +364,15 @@ setup_rhdh() {
   before=$(rhdh_config_hash 2>/dev/null || true)
   oc apply --server-side --force-conflicts --field-manager=maas-stack -n "$NS" \
     -f "${RHDH_DIR}/lightspeed/app-config-lightspeed.yaml" >/dev/null && ok "ConfigMap app-config-lightspeed"
-  oc create cm lightspeed-stack-config -n "$NS" --from-file=lightspeed-stack.yaml="${RHDH_DIR}/lightspeed/lightspeed-stack.yaml" \
-    --dry-run=client -o yaml | oc apply --server-side --force-conflicts --field-manager=maas-stack -f - >/dev/null \
-    && ok "ConfigMap lightspeed-stack-config (Lightspeed Core: MCP servers mcp-integration-tools + platform-tools)"
   [[ ${#MODELS[@]} -gt 0 ]] || resolve_models
-  local llama; llama=$(mktemp)
-  render_llama_stack_config "$llama"
-  oc create cm lightspeed-llama-stack-config -n "$NS" --from-file=config.yaml="$llama" \
+  local stack; stack=$(mktemp)
+  render_lightspeed_stack_config "$stack"
+  oc create cm lightspeed-stack-config -n "$NS" --from-file=lightspeed-stack.yaml="$stack" \
     --dry-run=client -o yaml | oc apply --server-side --force-conflicts --field-manager=maas-stack -f - >/dev/null \
-    && ok "ConfigMap lightspeed-llama-stack-config (Llama Stack providers: vllm -> ${MODEL}$(for m in "${MODELS[@]:1}"; do printf ', vllm-%s' "$m"; done))"
-  rm -f "$llama"
+    && ok "ConfigMap lightspeed-stack-config (LLM providers: vllm -> ${MODEL}$(for m in "${MODELS[@]:1}"; do printf ', vllm-%s' "$m"; done)$([[ -n "$(secret_value "$NS" lightspeed-secrets OPENAI_API_KEY)" ]] && echo ', openai'); MCP servers mcp-integration-tools + platform-tools)"
+  rm -f "$stack"
+  # 1.x leftover: the separate Llama Stack config is not used by Developer Hub 2.1
+  oc delete cm lightspeed-llama-stack-config -n "$NS" --ignore-not-found >/dev/null
   ensure_dynamic_plugins
   after=$(rhdh_config_hash)
   if patch_backstage_cr; then changed=true; fi   # the operator rolls out on a CR change
@@ -360,8 +380,10 @@ setup_rhdh() {
     oc rollout restart "deploy/${DEPLOY}" -n "$NS" >/dev/null   # ConfigMap/Secret content changed only
   fi
   if [[ "$changed" == true || "$before" != "$after" || "${LS_FORCE_RESTART:-false}" == true ]]; then
+    # Deployed=True, or (Developer Hub 2.1) Deployed=False with reason DeployInProgress while the new
+    # pod installs its plugins; any other reason is a reconcile error
     wait_until 120 "operator reconciled the Backstage CR" bash -c \
-      "[[ \"\$(oc get backstage ${CR} -n ${NS} -o jsonpath='{.status.conditions[?(@.type==\"Deployed\")].status}')\" == True ]]" \
+      "[[ \"\$(oc get backstage ${CR} -n ${NS} -o jsonpath='{.status.conditions[?(@.type==\"Deployed\")].status}{.status.conditions[?(@.type==\"Deployed\")].reason}')\" =~ ^(True|FalseDeployInProgress) ]]" \
       || { oc get backstage "$CR" -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Deployed")].message}' | sed 's/^/      /'; echo; die "the operator did not apply the Backstage CR"; }
     wait_rhdh || die "Developer Hub did not come back"
   else
@@ -372,7 +394,7 @@ setup_rhdh() {
 # ----------------------------------------------------------------------------- test / ask
 LCS_PY='
 # Same request as the Lightspeed backend plugin (router.cjs.js, POST /v1/query of the chat UI):
-# streaming_query + system_prompt (lightspeed.systemPrompt) + the RHDH docs vector store +
+# streaming_query + system_prompt (intelligent-assistant.systemPrompt) + the RHDH docs vector store +
 # MCP-HEADERS with the bare token per MCP server (Llama Stack adds "Bearer ").
 import json, sys, urllib.request
 q, model, provider, headers, system_prompt = sys.argv[1:6]
@@ -524,7 +546,7 @@ status() {
   info "Backstage CR      : $(oc get backstage "$CR" -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Deployed")].status} {.status.conditions[?(@.type=="Deployed")].reason}' 2>/dev/null)"
   info "Developer Hub pod : $(oc get pods -n "$NS" -l rhdh.redhat.com/app=backstage-developer-hub --no-headers 2>/dev/null | awk '{print $1" "$2" "$3}' | tr '\n' ' ')"
   info "lightspeed-core   : $(oc get deploy "$DEPLOY" -n "$NS" -o json | jq -r '[.spec.template.spec.containers[].name] | join(", ")')"
-  info "LLM secret        : $(secret_value "$NS" lightspeed-secrets VLLM_URL || true) $([[ -n "$(secret_value "$NS" lightspeed-secrets ENABLE_OPENAI)" ]] && echo '+ OpenAI')"
+  info "LLM secret        : $(secret_value "$NS" lightspeed-secrets VLLM_URL || true) $([[ -n "$(secret_value "$NS" lightspeed-secrets OPENAI_API_KEY)" ]] && echo '+ OpenAI')"
   info "MaaS subscription : $(oc get maassubscription "$SUB" -n models-as-a-service -o jsonpath='{.status.phase} ({.spec.modelRefs[*].name})' 2>/dev/null || echo missing)"
   info "platform-mcp      : $(oc get deploy platform-mcp -n "$NS" -o jsonpath='{.status.readyReplicas}/{.spec.replicas} ready' 2>/dev/null || echo 'not deployed')"
   info "MCP plugins       : $(oc get cm dynamic-plugins-rhdh -n "$NS" -o jsonpath='{.data.dynamic-plugins\.yaml}' | grep -oE '(mcp-actions-backend|[a-z-]+-mcp-extras)' | sort -u | tr '\n' ' ')"

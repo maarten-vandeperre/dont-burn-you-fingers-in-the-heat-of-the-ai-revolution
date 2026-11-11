@@ -14,6 +14,8 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 3
+      # a hung curl must not block the CronJob forever (concurrencyPolicy: Forbid)
+      activeDeadlineSeconds: 300
       ttlSecondsAfterFinished: 600
       template:
         spec:
@@ -25,12 +27,12 @@ spec:
               args:
                 - |
                   PERSES=http://data-science-perses.redhat-ods-monitoring.svc:8080
-                  for i in $(seq 1 30); do curl -sf $PERSES/api/v1/health >/dev/null 2>&1 && break; sleep 5; done
-                  curl -sf -X PUT "$PERSES/api/v1/globalsecrets/thanos-querier-global-datasource-secret" \
+                  for i in $(seq 1 30); do curl -sf --max-time 5 $PERSES/api/v1/health >/dev/null 2>&1 && break; sleep 5; done
+                  curl -sf --max-time 20 -X PUT "$PERSES/api/v1/globalsecrets/thanos-querier-global-datasource-secret" \
                     -H "Content-Type: application/json" \
                     -d '{"kind":"GlobalSecret","metadata":{"name":"thanos-querier-global-datasource-secret"},"spec":{"authorization":{"type":"Bearer","credentialsFile":"/var/run/secrets/kubernetes.io/serviceaccount/token"},"tlsConfig":{"caFile":"/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"}}}'
                   echo
-                  RESULT=$(curl -sf "$PERSES/proxy/globaldatasources/thanos-querier-global-datasource/api/v1/query?query=count(up)" 2>/dev/null)
+                  RESULT=$(curl -sf --max-time 30 "$PERSES/proxy/globaldatasources/thanos-querier-global-datasource/api/v1/query?query=count(up)" 2>/dev/null)
                   echo "$RESULT" | grep -q '"success"' && echo "OK: Perses proxy to Thanos works" || { echo "WARN: $RESULT"; exit 1; }
               resources:
                 requests: {cpu: 10m, memory: 32Mi}

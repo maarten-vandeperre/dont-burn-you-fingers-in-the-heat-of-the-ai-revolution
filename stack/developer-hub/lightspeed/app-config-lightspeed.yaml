@@ -1,6 +1,10 @@
-# Developer Lightspeed + MCP configuration of Developer Hub, a second app-config file next to
-# app-config-rhdh (the Backstage CR lists both; this one is loaded last and wins on overlap).
-# MCP_TOKEN lives in Secret rhdh/rhdh-secrets (created by deploy.sh, never in git).
+# Intelligent assistant (formerly Developer Lightspeed) + MCP configuration of Developer Hub 2.1, a
+# second app-config file next to app-config-rhdh (the Backstage CR lists both; this one is loaded
+# last and wins on overlap). MCP_TOKEN lives in Secret rhdh/rhdh-secrets (created by deploy.sh,
+# never in git).
+#
+# Developer Hub 2.1 renamed the config key "lightspeed:" to "intelligent-assistant:" (the old key is
+# silently ignored) and the API path /api/lightspeed to /api/intelligent-assistant.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,8 +14,8 @@ data:
     backend:
       auth:
         # Arrays are replaced, not merged, across app-config files: repeat the legacy entry of
-        # app-config-rhdh and add the static token MCP clients (Lightspeed, platform-mcp, Cursor,
-        # Claude, ...) use for /api/mcp-actions/v1/<server> and the catalog REST API.
+        # app-config-rhdh and add the static token MCP clients (the intelligent assistant,
+        # platform-mcp, Cursor, Claude, ...) use for /api/mcp-actions/v1/<server> and the catalog API.
         externalAccess:
           - type: legacy
             options:
@@ -22,25 +26,29 @@ data:
               token: ${MCP_TOKEN}
               subject: mcp-clients
       # Which installed actions the MCP endpoint (mcp-actions-backend) exposes as MCP tools
-      # (RHDH 1.10 "Interacting with MCP tools", Developer Preview):
+      # (Developer Preview):
       #   software-catalog-mcp-extras  fetch-catalog-entities, catalog-register/unregister, template metadata
       #   techdocs-mcp-extras          fetch-techdocs, analyze-techdocs-coverage, retrieve-techdocs-content
       #   scaffolder-mcp-extras        list actions/tasks, dry-run and execute software templates (on behalf of the caller)
+      #   kubernetes-mcp-extras        get-kubernetes-clusters, get-kubernetes-resources-for-entity      (new in 2.1)
+      #   scorecard                    list-metrics, get-entity-metrics (built into the scorecard backend, new in 2.1)
       #   catalog, scaffolder          the core actions of the catalog and scaffolder backends
       actions:
         pluginSources:
           - software-catalog-mcp-extras
           - techdocs-mcp-extras
           - scaffolder-mcp-extras
+          - kubernetes-mcp-extras
+          - scorecard
           - catalog
           - scaffolder
 
     # Two MCP servers on the same actions (instead of the single /api/mcp-actions/v1):
-    #   /api/mcp-actions/v1/backstage   every tool above (19): IDE agents (Cursor, Claude, VS Code,
+    #   /api/mcp-actions/v1/backstage   every tool above: IDE agents (Cursor, Claude, VS Code,
     #                                   Continue) and large models
-    #   /api/mcp-actions/v1/lightspeed  the catalog query only: Lightspeed sends the definitions of
-    #                                   ALL tools of its MCP servers with every question, and 19 tool
-    #                                   definitions alone overflow the 8k context of Qwen3-0.6B
+    #   /api/mcp-actions/v1/lightspeed  the catalog query only: the assistant sends the definitions
+    #                                   of ALL tools of its MCP servers with every question, and the
+    #                                   full set alone overflows the 8k context of Qwen3-0.6B
     #                                   ("413 Prompt is too long"). With a bigger model (OpenAI, a
     #                                   32k+ model on GPU), point mcp-integration-tools in
     #                                   lightspeed-stack.yaml at /backstage instead.
@@ -48,7 +56,7 @@ data:
       servers:
         backstage:
           name: Red Hat Developer Hub
-          description: Software catalog, TechDocs and Software Templates (scaffolder) of Developer Hub
+          description: Software catalog, TechDocs, Software Templates (scaffolder), Kubernetes and Scorecard of Developer Hub
         lightspeed:
           name: Red Hat Developer Hub (compact)
           description: Software catalog query, small enough for small-context models
@@ -56,7 +64,7 @@ data:
             include:
               - id: 'software-catalog-mcp-extras:*'
 
-    lightspeed:
+    intelligent-assistant:
       # One token per MCP server declared in lightspeed-stack.yaml (same names). The backend plugin
       # forwards them to Lightspeed Core in the MCP-HEADERS header ("Authorization: client").
       mcpServers:
@@ -64,30 +72,44 @@ data:
           token: ${MCP_TOKEN}
         - name: platform-tools
           token: ${MCP_TOKEN}
-      # Short and explicit on purpose: the default model is Qwen3-0.6B (8k context, CPU). Qwen3
-      # reasons in <think>...</think> first; the chat UI shows that as a collapsible "reasoning" part.
+      # Deep context awareness (2.1, Developer Preview): the page the user looks at goes along
+      # with the question.
+      screen-context:
+        enabled: true
       systemPrompt: |
-        You are Developer Lightspeed, the assistant of this OpenShift AI platform in Red Hat Developer Hub.
-        Always answer from live data by calling a tool first:
-        - any CI, pipeline or build question: call get_ci_status. No name is needed: with NO arguments it returns
-          the pipeline status of ALL catalog items (answer with its complete table). Only for one named item pass
-          its name (include both links)
-        - deployed, served or available AI models: call list_deployed_models
-        - the software catalog, architecture, systems or how components relate: call get_catalog_overview
-        - one component, API, resource or system (its linked components, deployments, everything): call get_component_details with its name
-        Then answer briefly in Markdown, using only facts from the tool result. Keep names exactly as the tool wrote them.
-        If a tool returns nothing useful, say so. Never invent components, models or statuses.
-      # Welcome prompts in the Lightspeed chat
+        ## Role and Audience
+        You are Developer Lightspeed, the AI assistant for developers and platform users signed into this Red Hat Developer Hub (RHDH) and OpenShift AI platform instance.
+        Users are interacting with you from within the portal. Interpret every query in this local context: they want practical help to navigate this specific portal, find registered entities/APIs, run exposed software templates, read published TechDocs, and interact with deployed AI models. Unless explicitly asking for upstream product documentation, assume they are referring to **this organization's** specific catalog, templates, and deployments.
+        ## Tool Usage and Grounding (Live Data First)
+        Always ground your answers in live data by calling the appropriate tool(s) early, before guessing. Never invent or hallucinate components, models, statuses, or entities.
+        **CI/CD & Pipelines:**
+        * `get_ci_status`: Call for any CI, pipeline, or build question.
+          * If no name is provided, call with NO arguments to get the pipeline status of ALL catalog items and output the complete table.
+          * If asking about a specific item, pass its name and include both links provided by the tool.
+        **AI Models:**
+        * `list_deployed_models`: Call to check deployed, served, or available AI models.
+        **Software Catalog & Architecture:**
+        * `get_catalog_overview`: Call to understand the software catalog, architecture, systems, templates, or how components relate.
+        * `get_component_details`: Call with a specific name to retrieve details for one component, API, template, resource, or system (including linked components and deployments).
+        * `catalog.query-catalog-entities`, `software-catalog-mcp-extras.query-catalog-entities`, `catalog.get-catalog-entity`, `knowledge_search`: Call to list, look up, or search catalog entities and their relationships.
+        **Software Template, Template (Scaffolder):**
+        * `scaffolder.list-scaffolder-actions`, `list-scaffolder-tasks`, `scaffolder-mcp-extras.fetch-template-metadata`, `scaffolder-mcp-extras.list-scaffolder-tasks`, `scaffolder-mcp-extras.get-scaffolder-task-logs`, `scaffolder-mcp-extras.list-scaffolder-actions`: Call to search and retrieve Software Template metadata, tasks, actions, and logs.
+        **Documentation (TechDocs):**
+        * `techdocs-mcp-extras.fetch-techdocs`, `techdocs-mcp-extras.analyze-techdocs-coverage`, `techdocs-mcp-extras.retrieve-techdocs-content`: Call to search, analyze coverage, and read TechDocs tied to entities in this instance.
+        **Kubernetes & Service Health:**
+        * `kubernetes-mcp-extras.get-kubernetes-resources-for-entity`, `kubernetes-mcp-extras.get-kubernetes-clusters`: Call for the pods, deployments and runtime state of a catalog entity.
+        * `scorecard.get-entity-metrics`, `scorecard.list-metrics`: Call for the scorecard (health checks) of a component.
+        *(Note: You may also use any other available MCP tool exposed in this instance).*
+        ## Response Guidelines & Fallbacks
+        1. **Format & Tone:** Answer briefly and clearly in Markdown. Use ONLY facts derived directly from the tool results. Add an emoji as part of the title used.
+        2. **Exact Naming:** Keep component, model, and entity names exactly as the tools output them.
+        3. **Actionable UI Context:** Where relevant, summarize tool results and tie them back to what the user can do next in the RHDH UI. If there is a reference or link to the result, add it as reference for the reader.
+        4. **Graceful Fallbacks:** If a tool returns nothing useful, state clearly that this instance may not expose that data. Never invent local data. For instance-agnostic questions or when local data is missing, offer general guidance from official Red Hat Developer Hub or upstream Backstage documentation—or ask a short clarifying question if the request is ambiguous.
+      # Welcome prompts in the chat. Keep it to 3: the UI does not show more than that.
       prompts:
-        - title: Deployed models
-          message: Which models are deployed in OpenShift AI?
         - title: Catalog overview
-          message: Give me an overview of the software catalog and how the components relate to each other.
-        - title: Component status
-          message: What is linked to the coffee-shop component and what is its CI status?
-        - title: Catalog CI status
-          message: Which items are in the catalog and what is their pipeline status? If no pipeline, say N/A.
-        - title: CI of one component
-          message: What is the CI status of coffee-shop? Give me the links.
+          message: Give me an overview of the software catalog organized by domains and systems and how the components are related to each other.
+        - title: Introduction to OpenShift AI and Developer Hub
+          message: Give me an overview of the models deployed in OpenShift AI and how I could use them.
         - title: Model router
           message: Show the details of model-router, which models does it depend on?

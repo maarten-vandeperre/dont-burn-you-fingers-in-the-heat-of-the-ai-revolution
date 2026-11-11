@@ -3,34 +3,31 @@ kind: Backstage
 metadata:
   name: developer-hub
 spec:
-  # Developer Lightspeed: the operator's "lightspeed" flavour (on by default, explicit here) adds the
-  # lightspeed-core sidecar (Lightspeed Core Service + Llama Stack as a library), the RHDH docs RAG
-  # init container and the Lightspeed frontend/backend plugins. ./deploy.sh lightspeed setup
-  # connects it to a MaaS model and to the MCP tools (docs/demos/13-developer-lightspeed.md).
+  # Intelligent assistant (Developer Hub 2.1, formerly "Developer Lightspeed"): the operator's
+  # "intelligent-assistant" flavour (on by default, explicit here; it was called "lightspeed" in
+  # 1.x) adds the lightspeed-core sidecar (Lightspeed Core Service with an embedded inference
+  # stack) and the intelligent-assistant frontend/backend plugins. ./deploy.sh lightspeed setup
+  # connects it to the MaaS models and to the MCP tools (docs/demos/13-developer-lightspeed.md).
   flavours:
-    - name: lightspeed
+    - name: intelligent-assistant
       enabled: true
   application:
     appConfig:
       mountPath: /opt/app-root/src
       configMaps:
         - name: app-config-rhdh
-        - name: app-config-lightspeed     # Lightspeed + MCP endpoint (loaded last)
+        - name: app-config-lightspeed     # intelligent assistant + MCP endpoint (loaded last)
     dynamicPluginsConfigMapName: dynamic-plugins-rhdh
     # catalog entities + software templates as files in /opt/app-root/src/catalog
     extraFiles:
       mountPath: /opt/app-root/src/catalog
       configMaps:
         - name: rhdh-catalog
-        # Lightspeed Core config (its MCP servers) over the operator default, sidecar only
+        # Lightspeed Core config over the operator default, sidecar only: the LLM providers
+        # (inference.providers: one per MaaS model, one shared API key) and the MCP servers.
+        # Rendered by ./deploy.sh lightspeed setup; a placeholder from deploy.sh until then.
         - name: lightspeed-stack-config
           key: lightspeed-stack.yaml
-          mountPath: /app-root
-          containers: [lightspeed-core]
-        # Llama Stack config (the LLM providers: one per MaaS model, one shared API key) over the
-        # operator default, sidecar only. Placeholder from deploy.sh = the operator default.
-        - name: lightspeed-llama-stack-config
-          key: config.yaml
           mountPath: /app-root
           containers: [lightspeed-core]
     extraEnvs:
@@ -38,8 +35,8 @@ spec:
         - name: rhdh-cluster-params
       secrets:
         - name: rhdh-secrets
-        # LLM provider of Lightspeed (ENABLE_VLLM, VLLM_URL, VLLM_API_KEY, ...), sidecar only.
-        # Placeholder from deploy.sh until ./deploy.sh lightspeed setup fills it.
+        # LLM provider keys of the intelligent assistant (VLLM_URL, VLLM_API_KEY, OPENAI_API_KEY,
+        # ...), sidecar only. Placeholder from deploy.sh until ./deploy.sh lightspeed setup fills it.
         - name: lightspeed-secrets
           containers: [lightspeed-core]
       envs:
@@ -48,5 +45,22 @@ spec:
           value: "0"
     route:
       enabled: true
+  # The plugin installer extracts every OCI plugin (community plugins bring their own node_modules)
+  # into this per-pod volume; the operator default of 2Gi runs out ("ENOSPC") with the 2.1 plugin
+  # set of this platform (MCP, AI Catalog, OpenShift AI connector, Scorecard, Argo CD, Tekton).
+  deployment:
+    patch:
+      spec:
+        template:
+          spec:
+            volumes:
+              - name: dynamic-plugins-root
+                ephemeral:
+                  volumeClaimTemplate:
+                    spec:
+                      accessModes: [ReadWriteOnce]
+                      resources:
+                        requests:
+                          storage: 6Gi
   database:
     enableLocalDb: true

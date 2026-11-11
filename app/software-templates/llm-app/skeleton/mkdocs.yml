@@ -1,0 +1,8 @@
+site_name: ${{ values.name }}
+site_description: ${{ values.description | dump }}
+nav:
+  - Overview: index.md
+  - Model: model.md
+  - Deployment: deployment.md
+plugins:
+  - techdocs-core

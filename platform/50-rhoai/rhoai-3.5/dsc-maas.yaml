@@ -16,3 +16,9 @@ spec:
     # 3.5.x installs its module CRD is missing, and "ogx: Managed" then keeps the whole
     # DSC at Ready=False. Enable it with "./deploy.sh playground", which rolls it back
     # automatically when it hits that issue.
+    # Model registry + model catalog (namespace rhoai-model-registries). The registry instance
+    # is stack/rhoai/model-registry.yaml; the model catalog is what Developer Hub's OpenShift AI
+    # connector reads for the model cards (TechDocs) of the deployed models.
+    modelregistry:
+      managementState: Managed
+      registriesNamespace: rhoai-model-registries

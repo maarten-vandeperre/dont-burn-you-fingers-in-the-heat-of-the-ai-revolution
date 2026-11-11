@@ -1,0 +1,50 @@
+# Developer Hub 2.1: the operator now puts NetworkPolicies around the Developer Hub pod
+# (backstage-netpol-developer-hub-*): default deny, ingress only from the router (7007) and metrics,
+# egress only DNS, PostgreSQL, Redis and TCP 443/6443. Policies match the POD port after the service
+# translation, so in-cluster services that listen on another port are blocked even when called on
+# :443/:80. These additive policies open exactly what this platform's integrations need:
+#   egress  -> Argo CD server (openshift-gitops, 8080): Argo CD tab + argocd:create-resources
+#   egress  -> platform-mcp (8080): the intelligent assistant's "platform-tools" MCP server
+#   ingress <- platform-mcp: it reads the catalog REST API of Developer Hub (backend 7007)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: developer-hub-allow-platform-egress
+spec:
+  podSelector:
+    matchLabels:
+      rhdh.redhat.com/app: backstage-developer-hub
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-gitops
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openshift-gitops-server
+      ports:
+        - {port: 8080, protocol: TCP}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: platform-mcp
+      ports:
+        - {port: 8080, protocol: TCP}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: developer-hub-allow-platform-mcp-ingress
+spec:
+  podSelector:
+    matchLabels:
+      rhdh.redhat.com/app: backstage-developer-hub
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: platform-mcp
+      ports:
+        - {port: 7007, protocol: TCP}

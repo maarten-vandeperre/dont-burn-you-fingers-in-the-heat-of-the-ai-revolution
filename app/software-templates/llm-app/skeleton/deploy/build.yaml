@@ -14,6 +14,9 @@ metadata:
   labels:
     backstage.io/kubernetes-id: ${{ values.name }}
 spec:
+  # the first build starts as soon as Argo CD creates the BuildConfig; later: oc start-build
+  triggers:
+    - type: ConfigChange
   source:
     type: Git
     git:

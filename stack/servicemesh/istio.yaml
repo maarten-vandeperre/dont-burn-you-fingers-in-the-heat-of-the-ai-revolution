@@ -3,6 +3,9 @@ kind: IstioCNI
 metadata:
   name: default
 spec:
+  # Service Mesh 3.5: Istio 1.31 (the -latest alias follows its patch releases). Upgrade order:
+  # CNI first, then the control plane (InPlace), then restart the workloads for new sidecars.
+  version: v1.31-latest
   namespace: istio-cni
 ---
 apiVersion: sailoperator.io/v1
@@ -10,6 +13,7 @@ kind: Istio
 metadata:
   name: default
 spec:
+  version: v1.31-latest
   namespace: istio-system
   updateStrategy:
     type: InPlace

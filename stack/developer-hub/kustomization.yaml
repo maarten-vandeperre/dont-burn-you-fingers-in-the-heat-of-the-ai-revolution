@@ -17,6 +17,7 @@ resources:
   - rbac.yaml
   - app-config.yaml
   - backstage.yaml
+  - networkpolicy.yaml           # 2.1 operator NetworkPolicies: open Argo CD + platform-mcp
   - lightspeed/app-config-lightspeed.yaml
 configMapGenerator:
   - name: rhdh-cluster-params
@@ -37,6 +38,7 @@ configMapGenerator:
       - catalog/models.yaml
       - catalog/ai-demo.yaml
       - catalog/apis.yaml
+      - catalog/ai-assets.yaml
       - catalog/argo-rollouts-demo.yaml
       - catalog/template-traffic-pattern.yaml
       - catalog/template-model-router-rollout.yaml

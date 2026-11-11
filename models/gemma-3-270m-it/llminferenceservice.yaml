@@ -9,6 +9,12 @@ metadata:
     openshift.io/display-name: "google/gemma-3-270m-it"
     opendatahub.io/model-type: generative
     security.opendatahub.io/enable-auth: "true"
+    # Developer Hub OpenShift AI connector: AI Catalog entity in system models-as-a-service, model
+    # card from the OpenShift AI model catalog (stack/rhoai/model-catalog-sources.yaml)
+    rhdh.io/system: models-as-a-service
+    rhdh.io/owner: platform-team
+    rhdh.io/catalog-source: platform_models
+    rhdh.io/catalog-model: google/gemma-3-270m-it
   labels:
     backstage.io/kubernetes-id: gemma-3-270m-it
     opendatahub.io/dashboard: "true"

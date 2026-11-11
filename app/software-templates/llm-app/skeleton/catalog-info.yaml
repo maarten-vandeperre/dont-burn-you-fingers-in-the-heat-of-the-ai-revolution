@@ -7,6 +7,8 @@ metadata:
     backstage.io/source-location: url:https://${{ values.gitlabHost }}/ai-platform/${{ values.name }}/-/tree/main/
     backstage.io/kubernetes-id: ${{ values.name }}
     backstage.io/kubernetes-namespace: ${{ values.name }}
+    backstage.io/techdocs-ref: dir:.
+    argocd/app-selector: backstage-name=${{ values.name }}
   links:
     - url: https://${{ values.name }}-${{ values.name }}.${{ values.appsDomain }}
       title: Open the application
@@ -20,3 +22,5 @@ spec:
   lifecycle: experimental
   owner: group:default/ai-app-team
   system: models-as-a-service
+  dependsOn:
+    - resource:default/${{ values.modelId }}

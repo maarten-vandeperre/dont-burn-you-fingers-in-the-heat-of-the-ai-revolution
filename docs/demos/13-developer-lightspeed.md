@@ -1,7 +1,7 @@
-# Demo 13: Developer Lightspeed — an assistant that knows *this* platform
+# Demo 13: The intelligent assistant (Developer Lightspeed) — an assistant that knows *this* platform
 
-**The story:** Red Hat Developer Lightspeed for Developer Hub is a chat assistant inside the
-developer portal. Out of the box it knows the Developer Hub documentation. Here it gets two more
+**The story:** the intelligent assistant of Red Hat Developer Hub (called Red Hat Developer
+Lightspeed for Developer Hub before 2.1) is a chat assistant inside the developer portal. Out of the box it knows the Developer Hub documentation. Here it gets two more
 things that make it useful for the developers on *this* platform:
 
 * **its brain from the platform itself**: every model served by OpenShift AI (Qwen3-0.6B by
@@ -16,8 +16,8 @@ things that make it useful for the developers on *this* platform:
 
 ```
 Developer Hub pod (namespace rhdh)
- ├─ backstage-backend                              lightspeed-core (sidecar, "lightspeed" flavour)
- │   Lightspeed frontend + backend plugins  ──────▶  Lightspeed Core Service + Llama Stack (library)
+ ├─ backstage-backend                              lightspeed-core (sidecar, "intelligent-assistant" flavour)
+ │   intelligent-assistant plugins          ──────▶  Lightspeed Core Service (embedded inference stack)
  │   (system prompt, per-server MCP tokens)          │ inference: vllm ──────────┐   MaaS gateway ──▶ qwen3-0-6b
  │                                                   │            vllm-gemma-3-270m-it ─┴─▶ (one API key) ──▶ gemma-3-270m-it
  │                                                   │            (SA developer-lightspeed, subscription developer-lightspeed)
@@ -80,10 +80,10 @@ Developer Hub pod (namespace rhdh)
 ## Part A: the platform's own model (3 minutes)
 
 **A1. Lightspeed in Developer Hub.**
-* **Do:** Developer Hub > **Lightspeed** in the left navigation (or the Lightspeed button at the
-  bottom right of any page). Open the model picker at the top of the chat.
-* **You see:** the welcome prompts *Deployed models*, *Catalog overview*, *Component status*,
-  *Catalog CI status*, *CI of one component*, *Model router*; the models `qwen3-0-6b` (provider
+* **Do:** Developer Hub > the assistant button at the bottom right of any page (or
+  `/intelligent-assistant`). Open the model picker at the top of the chat.
+* **You see:** three welcome prompts (the chat shows at most three): *Catalog overview*,
+  *Introduction to OpenShift AI and Developer Hub*, *Model router*; the models `qwen3-0-6b` (provider
   `vllm`, the default) and `gemma-3-270m-it` (provider `vllm-gemma-3-270m-it`): every model served
   through MaaS, plus `openai/...` models only when you ran `lightspeed llm` with `OPENAI_API_KEY`.
 * **Say:** "This is Red Hat Developer Lightspeed. The models behind it are not a SaaS endpoint:
@@ -194,10 +194,10 @@ Developer Hub pod (namespace rhdh)
 
 | File | What to point at |
 |---|---|
-| `stack/developer-hub/backstage.yaml` | `flavours: lightspeed`; `app-config-lightspeed`; `lightspeed-stack-config`, `lightspeed-llama-stack-config` and `lightspeed-secrets` mounted **only** into the `lightspeed-core` container |
-| `stack/developer-hub/lightspeed/llama-stack-config.yaml` | the operator's Llama Stack config plus the `@maas-models@` marker where `lightspeed.sh` adds one `vllm-<model>` provider per extra MaaS model (same `VLLM_API_KEY`) |
-| `stack/developer-hub/lightspeed/app-config-lightspeed.yaml` | the static `MCP_TOKEN` (`externalAccess`), `backend.actions.pluginSources`, `lightspeed.mcpServers` (one token per MCP server), the short `systemPrompt` that maps question types to tools, the welcome `prompts` |
-| `stack/developer-hub/lightspeed/lightspeed-stack.yaml` | `mcp_servers`: `mcp-integration-tools` (Developer Hub) and `platform-tools` (platform-mcp), `Authorization: 'client'` |
+| `stack/developer-hub/backstage.yaml` | `flavours: intelligent-assistant` (was `lightspeed` before 2.1); `app-config-lightspeed`; `lightspeed-stack-config` and `lightspeed-secrets` mounted **only** into the `lightspeed-core` container |
+| `stack/developer-hub/lightspeed/lightspeed-stack.yaml` | the 2.1 format: `inference.providers` with the `@llm-providers@` marker where `lightspeed.sh` adds `vllm` (default model), one `vllm-<model>` per extra MaaS model (same `VLLM_API_KEY`) and `openai`; `mcp_servers`: `mcp-integration-tools` (Developer Hub) and `platform-tools` (platform-mcp), `Authorization: 'client'` |
+| `stack/developer-hub/lightspeed/app-config-lightspeed.yaml` | the static `MCP_TOKEN` (`externalAccess`), `backend.actions.pluginSources` (incl. `kubernetes-mcp-extras` and `scorecard`, new in 2.1), `intelligent-assistant.mcpServers` (one token per MCP server), the `systemPrompt` that maps question types to tools, the three welcome `prompts` |
+| `stack/developer-hub/networkpolicy.yaml` | 2.1 puts NetworkPolicies around the Developer Hub pod: this opens the way to platform-mcp (and back) and to Argo CD |
 | `stack/lightspeed/maas/subscription.yaml` | Lightspeed's MaaS identity and token budget, one `modelRef` per model (lightspeed.sh syncs it with the Ready `MaaSModelRef`s) |
 | `stack/lightspeed/mcp-server/server.py` | four tools, pre-digested Markdown output: a 0.6B model answers well when the tool already joined and filtered the data |
 | `stack/lightspeed/mcp-server/rbac.yaml` | read-only, exactly the resources the tools read |
@@ -208,33 +208,44 @@ The important snippets:
 # backstage.yaml: the operator flavour + the sidecar-only mounts
 spec:
   flavours:
-    - name: lightspeed
+    - name: intelligent-assistant     # "lightspeed" before Developer Hub 2.1
       enabled: true
   application:
     extraFiles:
       configMaps:
-        - name: lightspeed-stack-config
+        - name: lightspeed-stack-config   # LLM providers + MCP servers (rendered by lightspeed.sh)
           key: lightspeed-stack.yaml
-          mountPath: /app-root
-          containers: [lightspeed-core]
-        - name: lightspeed-llama-stack-config   # LLM providers: one per MaaS model
-          key: config.yaml
           mountPath: /app-root
           containers: [lightspeed-core]
     extraEnvs:
       secrets:
-        - name: lightspeed-secrets          # ENABLE_VLLM, VLLM_URL, VLLM_API_KEY, VLLM_MAX_TOKENS
+        - name: lightspeed-secrets          # VLLM_URL, VLLM_API_KEY, VLLM_MAX_TOKENS (+ OPENAI_API_KEY)
           containers: [lightspeed-core]
 ```
 
 ```yaml
-# lightspeed-stack.yaml (Lightspeed Core): where the tools are
+# lightspeed-stack-config (Lightspeed Core, rendered by lightspeed.sh at the @llm-providers@ marker)
+llama_stack:
+  use_as_library_client: true
+  config:
+    baseline: byo-llm                  # embedded inference stack, no separate config.yaml any more
+inference:
+  providers:
+    - type: sentence_transformers
+    - type: vllm                       # the default model
+      id: vllm
+      api_key_env: VLLM_API_KEY
+      extra: {base_url: ${env.VLLM_URL:=}, max_tokens: ${env.VLLM_MAX_TOKENS:=2048}}
+    - type: vllm                       # one per extra MaaS model, same key
+      id: vllm-gemma-3-270m-it
+      api_key_env: VLLM_API_KEY
+      extra: {base_url: https://maas.<apps-domain>/maas-models/gemma-3-270m-it/v1}
 mcp_servers:
   - name: mcp-integration-tools
     provider_id: 'model-context-protocol'
     url: 'http://localhost:7007/api/mcp-actions/v1/lightspeed'   # compact server, see app-config
     authorization_headers:
-      Authorization: 'client'          # token sent by the Lightspeed backend (MCP-HEADERS)
+      Authorization: 'client'          # token sent by the assistant backend (MCP-HEADERS)
   - name: platform-tools
     provider_id: 'model-context-protocol'
     url: 'http://platform-mcp.rhdh.svc:8080/mcp'
@@ -250,43 +261,32 @@ backend:
       - type: static
         options: {token: ${MCP_TOKEN}, subject: mcp-clients}
   actions:
-    pluginSources: [software-catalog-mcp-extras, techdocs-mcp-extras, scaffolder-mcp-extras, catalog, scaffolder]
+    pluginSources: [software-catalog-mcp-extras, techdocs-mcp-extras, scaffolder-mcp-extras,
+                    kubernetes-mcp-extras, scorecard, catalog, scaffolder]
 mcpActions:
   servers:
     backstage: {name: Red Hat Developer Hub}               # /api/mcp-actions/v1/backstage: all tools
     lightspeed:                                            # /api/mcp-actions/v1/lightspeed
       name: Red Hat Developer Hub (compact)
       filter: {include: [{id: 'software-catalog-mcp-extras:*'}]}
-lightspeed:
+intelligent-assistant:                 # "lightspeed:" before 2.1 (the old key is silently ignored)
   mcpServers:                          # names = mcp_servers above
     - {name: mcp-integration-tools, token: ${MCP_TOKEN}}
     - {name: platform-tools, token: ${MCP_TOKEN}}
   systemPrompt: |
-    ... deployed models: call list_deployed_models; catalog: get_catalog_overview;
-    any CI question: get_ci_status (no name = all items as a table, a name = one item + links);
-    one component: get_component_details ...
+    ## Role and Audience ... ## Tool Usage and Grounding (Live Data First) ...
+  prompts:                             # at most 3: the chat does not show more
+    - {title: Catalog overview, message: ...}
+    - {title: Introduction to OpenShift AI and Developer Hub, message: ...}
+    - {title: Model router, message: ...}
 ```
 
 ```bash
 # lightspeed-secrets (written by lightspeed.sh, never in git)
-ENABLE_VLLM=true
 VLLM_URL=https://maas.<apps-domain>/maas-models/qwen3-0-6b/v1
 VLLM_API_KEY=sk-oai-...               # minted as system:serviceaccount:rhdh:developer-lightspeed
 VLLM_TLS_VERIFY=true
 VLLM_MAX_TOKENS=2048                   # 8k context: reasoning + a 21-row table fit, tool results keep ~5k
-```
-
-```yaml
-# lightspeed-llama-stack-config (generated by lightspeed.sh at the @maas-models@ marker)
-providers:
-  inference:
-    - provider_id: vllm-gemma-3-270m-it   # one per extra MaaS model
-      provider_type: remote::vllm
-      config:
-        base_url: https://maas.<apps-domain>/maas-models/gemma-3-270m-it/v1
-        api_token: ${env.VLLM_API_KEY:=}  # the same key as the default model
-    - provider_id: ${env.ENABLE_VLLM:+vllm}   # operator default: the default model (VLLM_URL)
-      ...
 ```
 
 ---
@@ -302,7 +302,7 @@ oc logs -n rhdh deploy/platform-mcp                 # one line per tool call: to
 ./deploy.sh usage                                   # tokens of subscription developer-lightspeed
 ```
 
-`ask` sends exactly what the chat UI sends (Lightspeed backend plugin, `router.cjs.js`):
+`ask` sends exactly what the chat UI sends (intelligent-assistant backend plugin):
 `POST /v1/streaming_query` on the sidecar with the `systemPrompt`, the RHDH docs vector store and
 `MCP-HEADERS: {"<server>": {"Authorization": "<bare token>"}}`.
 
@@ -330,4 +330,7 @@ gone after a Developer Hub restart. Remove the whole wiring with `./deploy.sh li
 | The answer ignores the tool / invents things | small-model limits: ask more directly ("call get_component_details for X"), or pick an OpenAI model. The tool outputs are short Markdown for this reason |
 | A long answer (the CI table) stops halfway | Qwen3-0.6B has an 8k context that holds the tools, the tool result, its reasoning and the answer. The tools keep their output compact and say `/no_think` at the end of their result; `VLLM_MAX_TOKENS` is 2048 |
 | `lightspeed test` / `ask`: `error executing command in container: signal: killed` | the Developer Hub operator replaced the pod (it can roll once more after `setup`). `ask` waits for the rollout and asks again once |
-| *MCP server ... is not configured* in the MCP settings | the name in `lightspeed.mcpServers` must match `mcp_servers[].name` in `lightspeed-stack.yaml` |
+| *MCP server ... is not configured* in the MCP settings | the name in `intelligent-assistant.mcpServers` must match `mcp_servers[].name` in `lightspeed-stack.yaml` |
+| After the upgrade to 2.1: `lightspeed-core` crash-loops, *API 'agents' does not exist* | a 1.x Llama Stack config is still mounted: 2.1 has no separate `config.yaml`. `./deploy.sh lightspeed setup` renders the 2.1 `lightspeed-stack.yaml` and removes `lightspeed-llama-stack-config` |
+| After the upgrade to 2.1: the system prompt / welcome prompts are the defaults | the config key is `intelligent-assistant:` since 2.1 (`lightspeed:` is ignored) |
+| `platform-tools` fails, MCP calls time out | the 2.1 operator NetworkPolicies block the pod port 8080: `oc apply -n rhdh -f stack/developer-hub/networkpolicy.yaml` |

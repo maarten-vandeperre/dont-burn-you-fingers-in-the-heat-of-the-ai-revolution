@@ -1,0 +1,18 @@
+# OpenShift AI model registry "platform-registry" (OpenShift AI > Models > Model registry).
+# The modelregistry component (platform/50-rhoai/rhoai-3.x/dsc-maas.yaml) runs the operator and
+# the model catalog in rhoai-model-registries; this is the registry instance itself, with a
+# PostgreSQL the operator generates (dev sizing). The REST API is exposed through
+# kube-rbac-proxy (OpenShift token), the route is created by the operator.
+apiVersion: modelregistry.opendatahub.io/v1beta1
+kind: ModelRegistry
+metadata:
+  name: platform-registry
+  namespace: rhoai-model-registries
+  labels:
+    modelregistry.opendatahub.io/registries-namespace: rhoai-model-registries
+spec:
+  rest: {}
+  kubeRBACProxy:
+    serviceRoute: enabled
+  postgres:
+    generateDeployment: true

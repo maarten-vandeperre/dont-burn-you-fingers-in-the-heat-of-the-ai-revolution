@@ -8,6 +8,12 @@ metadata:
     openshift.io/display-name: "Qwen/Qwen3-0.6B"
     opendatahub.io/model-type: generative
     security.opendatahub.io/enable-auth: "true"
+    # Developer Hub OpenShift AI connector: AI Catalog entity in system models-as-a-service, model
+    # card from the OpenShift AI model catalog (stack/rhoai/model-catalog-sources.yaml)
+    rhdh.io/system: models-as-a-service
+    rhdh.io/owner: platform-team
+    rhdh.io/catalog-source: platform_models
+    rhdh.io/catalog-model: Qwen/Qwen3-0.6B
   labels:
     backstage.io/kubernetes-id: qwen3-0-6b
     opendatahub.io/dashboard: "true"

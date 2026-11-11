@@ -6,3 +6,4 @@ commonAnnotations:
   argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 resources:
   - rollouts.yaml
+  - argocd-image-triggers.yaml   # ignore images written by OpenShift image triggers

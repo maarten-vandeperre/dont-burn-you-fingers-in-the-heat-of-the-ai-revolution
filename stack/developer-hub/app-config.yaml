@@ -7,6 +7,24 @@ data:
     app:
       title: AI Platform Developer Hub
       baseUrl: https://${RHDH_HOST}
+      # New frontend system (Developer Hub 2.1): extensions are auto-discovered; this list only
+      # overrides/enables. Arrays REPLACE each other across config files, so the TechDocs addon
+      # defaults of the catalog index are repeated here.
+      extensions:
+        - addon:techdocs/expandable-navigation: false
+        - addon:techdocs/report-issue
+        - addon:techdocs/text-size: false
+        - addon:techdocs/light-box: false
+        # AI Catalog (/ai-catalog): models from OpenShift AI, MCP servers, skills, rules, agents
+        - page:ai-catalog/ai-catalog: {}
+        - entity-card:ai-catalog/ai-asset-details: {}
+        - entity-card:ai-catalog/agent-instructions: {}
+        - entity-card:ai-catalog/usage: {}
+        # Scorecard tab only on components (file checks read their GitLab source)
+        - entity-content:scorecard/entity-content-scorecard:
+            config:
+              allowedFilters:
+                - kind: component
     backend:
       baseUrl: https://${RHDH_HOST}
       cors:
@@ -21,9 +39,12 @@ data:
         allow:
           - host: "*.svc"
           - host: "*.svc.cluster.local"
+          - host: "model-catalog.${APPS_DOMAIN}"
 
-    # Sign-in with Keycloak (realm "demo", user DEMO_ADMIN_USER). The resolver maps the
-    # Keycloak username onto the User entity with the same name in the catalog (org.yaml).
+    # Sign-in with Keycloak (realm "demo", user DEMO_ADMIN_USER). The resolver maps the Keycloak
+    # e-mail onto the User entity with that spec.profile.email in the catalog (org.yaml). 2.1 uses the
+    # upstream OIDC module (plugin backstage-plugin-auth-backend-module-oidc-provider), which has no
+    # preferredUsernameMatchingUserEntityName resolver any more.
     signInPage: oidc
     auth:
       environment: production
@@ -39,7 +60,17 @@ data:
             callbackUrl: https://${RHDH_HOST}/api/auth/oidc/handler/frame
             signIn:
               resolvers:
-                - resolver: preferredUsernameMatchingUserEntityName
+                - resolver: emailMatchingUserEntityProfileEmail
+      # Agent-friendly CLI (Developer Hub 2.1): "rhdh-cli auth login" / "backstage-cli auth login"
+      # registers itself with a Client ID Metadata Document and signs the user in through the
+      # /oauth2 consent page (backstage-plugin-auth). Refresh tokens keep the CLI signed in.
+      clientIdMetadataDocuments:
+        enabled: true
+        allowedRedirectUriPatterns:
+          - http://localhost:*
+          - http://127.0.0.1:*
+      experimentalRefreshToken:
+        enabled: true
 
     # Source code lives in the demo GitLab ("View source" on every component)
     integrations:
@@ -48,15 +79,29 @@ data:
           apiBaseUrl: https://${GITLAB_HOST}/api/v4
           token: ${GITLAB_TOKEN}
 
-    # The whole platform as catalog entities (ConfigMap rhdh-catalog, mounted as files)
+    # The whole platform as catalog entities (ConfigMap rhdh-catalog, mounted as files), plus the
+    # models OpenShift AI serves (OpenShift AI connector, AiModelServerAPI entities) and the AI
+    # assets of the AI Catalog (AiResource: skills, rules, agents; API type mcp-server).
     catalog:
       rules:
-        - allow: [Component, System, Domain, API, Resource, Group, User, Location, Template]
+        - allow: [Component, System, Domain, API, Resource, Group, User, Location, Template, AiResource, AiModelServerAPI]
       locations:
         - type: file
           target: /opt/app-root/src/catalog/catalog-info.yaml
           rules:
-            - allow: [Component, System, Domain, API, Resource, Group, User, Location, Template]
+            - allow: [Component, System, Domain, API, Resource, Group, User, Location, Template, AiResource, AiModelServerAPI]
+      providers:
+        # OpenShift AI connector (kserve-kubeflow-connector-backend). The key is the connector's
+        # plugin ID (the model-catalog module finds it through discovery); the cluster entry reuses
+        # the Kubernetes plugin cluster (rhdh-kubernetes token, read access to serving.kserve.io
+        # and routes). The model catalog of OpenShift AI is found by its route label
+        # (app.kubernetes.io/managed-by=model-registry-operator, name contains "catalog").
+        modelCatalog:
+          kserve-kubeflow-connector:
+            openshift-ai:
+              kubernetesPluginRef: ${K8S_CLUSTER_NAME}
+              default-owner: platform-team
+              default-lifecycle: production
 
     # Kubernetes, Topology and Tekton tabs read the cluster with the rhdh-kubernetes identity
     kubernetes:
@@ -79,16 +124,23 @@ data:
         - {group: argoproj.io, apiVersion: v1alpha1, plural: analysisruns}
         - {group: networking.istio.io, apiVersion: v1, plural: virtualservices}
         - {group: networking.istio.io, apiVersion: v1, plural: destinationrules}
-        - {group: serving.kserve.io, apiVersion: v1alpha1, plural: llminferenceservices}
+        - {group: serving.kserve.io, apiVersion: v1alpha2, plural: llminferenceservices}
         - {group: maas.opendatahub.io, apiVersion: v1alpha1, plural: maasmodelrefs}
         - {group: kafka.strimzi.io, apiVersion: v1beta2, plural: kafkas}
         - {group: kafka.strimzi.io, apiVersion: v1beta2, plural: kafkaconnects}
         - {group: kafka.strimzi.io, apiVersion: v1beta2, plural: kafkaconnectors}
 
-    # Argo CD tab: the default OpenShift GitOps instance
+    # Argo CD tab (community argocd + argocd-backend plugins) and the argocd:create-resources
+    # scaffolder action: the default OpenShift GitOps instance
     argocd:
       username: admin
       password: ${ARGOCD_PASSWORD}
+      # AppProject that argocd:create-resources creates per application: the app's deploy/ brings
+      # its own Namespace (the action syncs with CreateNamespace=false)
+      projectSettings:
+        clusterResourceWhitelist:
+          - group: ''
+            kind: Namespace
       appLocatorMethods:
         - type: config
           instances:
@@ -96,6 +148,69 @@ data:
               url: https://openshift-gitops-server.openshift-gitops.svc.cluster.local
               username: admin
               password: ${ARGOCD_PASSWORD}
+
+    # Scorecard (Tech Preview): file checks on every component's source in GitLab
+    scorecard:
+      metricProviders:
+        filecheck:
+          fileExistence:
+            options:
+              files:
+                readme: README.md
+                dockerfile: Dockerfile
+                buildscript: build.gradle.kts
+
+    # Global header (new frontend system): Self-service button + application launcher links.
+    # Icons: a name from the icon set, a URL, or inline <svg> markup.
+    globalHeader:
+      components:
+        - title: Self-service
+          icon: add
+          link: /create
+          priority: 90
+      menuItems:
+        - target: app-launcher
+          title: Developer Hub
+          icon: developerHub
+          link: https://docs.redhat.com/en/documentation/red_hat_developer_hub
+          sectionLabel: Documentation
+          priority: 150
+        - target: app-launcher
+          title: OpenShift
+          icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 38 38"><rect x="1" y="1" width="36" height="36" rx="9"/><path d="M10.099 22.19c-.239 0-.467-.138-.571-.371-.14-.314.002-.685.317-.825l2.74-1.221c.313-.139.684.001.825.317s-.002.685-.317.825l-2.74 1.221a.63.63 0 0 1-.254.054zm-1.268 3.3c-.239 0-.468-.138-.571-.371-.14-.315.002-.685.317-.825l2.741-1.22a.63.63 0 0 1 .825.317c.14.315-.002.685-.317.825l-2.741 1.22a.63.63 0 0 1-.254.054zm17.597-10.57c-.239 0-.468-.138-.571-.371-.14-.315.002-.685.317-.825l2.741-1.221a.63.63 0 0 1 .825.317c.14.315-.002.685-.317.825l-2.741 1.221a.63.63 0 0 1-.254.054zm-1.267 3.301c-.239 0-.467-.138-.571-.371-.14-.314.002-.685.317-.825l2.74-1.221a.63.63 0 0 1 .825.317c.14.314-.002.685-.317.825l-2.74 1.221a.63.63 0 0 1-.254.054z" fill="#fff"/><path d="M18.951 28.634a9.59 9.59 0 0 1-6.122-2.218c-.266-.22-.303-.613-.083-.88s.612-.303.88-.083c2.469 2.041 5.821 2.499 8.748 1.197a8.33 8.33 0 0 0 4.964-7.303c.015-.345.293-.654.65-.598.345.015.612.306.598.65-.156 3.68-2.342 6.896-5.704 8.393a9.65 9.65 0 0 1-3.931.841zm-8.977-9.407c-.009 0-.019 0-.028-.001-.345-.016-.611-.308-.596-.652a9.58 9.58 0 0 1 5.703-8.366c3.363-1.496 7.215-.969 10.053 1.377.266.22.303.613.083.88s-.613.304-.88.083a8.33 8.33 0 0 0-8.748-1.197 8.34 8.34 0 0 0-4.963 7.28c-.015.335-.291.597-.624.597z" fill="#e00"/></svg>'
+          link: https://docs.redhat.com/en/documentation/openshift_container_platform/4.22
+          sectionLabel: Documentation
+          priority: 140
+        - target: app-launcher
+          title: OpenShift AI
+          icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 38 38"><rect x="1" y="1" width="36" height="36" rx="9"/><path d="M18.951 28.634a9.59 9.59 0 0 1-6.122-2.218c-.266-.22-.303-.613-.083-.88s.612-.303.88-.083c2.469 2.041 5.821 2.499 8.748 1.197a8.33 8.33 0 0 0 4.964-7.303c.015-.345.293-.654.65-.598.345.015.612.306.598.65-.156 3.68-2.342 6.896-5.704 8.393a9.65 9.65 0 0 1-3.931.841zm-8.977-9.407c-.009 0-.019 0-.028-.001-.345-.016-.611-.308-.596-.652a9.58 9.58 0 0 1 5.703-8.366c3.363-1.496 7.215-.969 10.053 1.377.266.22.303.613.083.88s-.613.304-.88.083a8.33 8.33 0 0 0-8.748-1.197 8.34 8.34 0 0 0-4.963 7.28c-.015.335-.291.597-.624.597z" fill="#e00"/></svg>'
+          link: https://rh-ai.${APPS_DOMAIN}
+          sectionLabel: Developer Tools
+          priority: 100
+        - target: app-launcher
+          title: Dev Spaces
+          icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 38 38"><path d="M10 1a9 9 0 0 0-9 9v18a9 9 0 0 0 9 9h18a9 9 0 0 0 9-9V10a9 9 0 0 0-9-9H10z" fill="#fff"/><path d="M19 30.625A11.64 11.64 0 0 1 7.375 19 11.64 11.64 0 0 1 19 7.375 11.64 11.64 0 0 1 30.625 19 11.64 11.64 0 0 1 19 30.625zm0-22A10.39 10.39 0 0 0 8.625 19 10.39 10.39 0 0 0 19 29.375 10.39 10.39 0 0 0 29.375 19 10.39 10.39 0 0 0 19 8.625z" fill="#ed0000"/><path d="M26 24.625H12c-.345 0-.625-.28-.625-.625V14c0-.345.28-.625.625-.625h14c.345 0 .625.28.625.625v10c0 .345-.28.625-.625.625zm-13.375-1.25h12.75v-8.75h-12.75v8.75z"/></svg>'
+          link: https://devspaces.${APPS_DOMAIN}
+          sectionLabel: Developer Tools
+          priority: 90
+        - target: app-launcher
+          title: GitLab
+          icon: '<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><polygon points="16 28.896 16 28.896 21.156 13.029 10.844 13.029 16 28.896" style="fill:#e24329"/><polygon points="16 28.896 10.844 13.029 3.619 13.029 16 28.896" style="fill:#fc6d26"/><path d="M3.619,13.029h0L2.052,17.851a1.067,1.067,0,0,0,.388,1.193L16,28.9,3.619,13.029Z" style="fill:#fca326"/><path d="M3.619,13.029h7.225L7.739,3.473a.534.534,0,0,0-1.015,0L3.619,13.029Z" style="fill:#e24329"/><polygon points="16 28.896 21.156 13.029 28.381 13.029 16 28.896" style="fill:#fc6d26"/><path d="M28.381,13.029h0l1.567,4.822a1.067,1.067,0,0,1-.388,1.193L16,28.9,28.381,13.029Z" style="fill:#fca326"/><path d="M28.381,13.029H21.156l3.105-9.557a.534.534,0,0,1,1.015,0l3.105,9.557Z" style="fill:#e24329"/></svg>'
+          link: https://${GITLAB_HOST}
+          sectionLabel: Developer Tools
+          priority: 80
+        - target: app-launcher
+          title: OpenShift GitOps
+          icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 38 38"><rect x="1" y="1" width="36" height="36" rx="9"/><path d="M18.951 28.634a9.59 9.59 0 0 1-6.122-2.218c-.266-.22-.303-.613-.083-.88s.612-.303.88-.083c2.469 2.041 5.821 2.499 8.748 1.197a8.33 8.33 0 0 0 4.964-7.303c.015-.345.293-.654.65-.598.345.015.612.306.598.65-.156 3.68-2.342 6.896-5.704 8.393a9.65 9.65 0 0 1-3.931.841z" fill="#e00"/></svg>'
+          link: https://openshift-gitops-server-openshift-gitops.${APPS_DOMAIN}
+          sectionLabel: Developer Tools
+          priority: 70
+        - target: app-launcher
+          title: Developer Hub Local
+          icon: developerHub
+          link: https://github.com/redhat-developer/rhdh-local
+          sectionLabel: Developer Tools
+          priority: 60
 
     # Write path for the software templates (http:backstage:request -> this proxy -> Kubernetes
     # API) with the narrowly scoped rhdh-platform-actions token. Only GET and PATCH.

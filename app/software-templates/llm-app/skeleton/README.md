@@ -16,7 +16,7 @@ Created from the Developer Hub template **LLM application**.
 ```bash
 # backend (needs an OpenAI compatible endpoint: MaaS, Podman Desktop AI Lab, OpenAI, ...)
 export LLM_BASE_URL=http://localhost:35000/v1   # e.g. a Podman Desktop AI Lab model service
-export LLM_API_KEY=not-needed
+export ./depl=not-needed
 ./gradlew quarkusDev                            # http://localhost:8080/api/config
 
 # UI with hot reload (proxies /api to :8080)

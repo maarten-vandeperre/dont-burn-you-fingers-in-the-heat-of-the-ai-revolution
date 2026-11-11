@@ -1,0 +1,126 @@
+# OpenShift AI model catalog: a custom source "Platform models" next to the Red Hat sources, with the
+# model cards of the models this platform serves (OpenShift AI > AI hub > Catalog > source
+# "Platform models"). The ConfigMap is the one the model catalog reads user sources from
+# (mounted at /data/user-model-sources); the operator creates it empty ("catalogs: []"). Artifact
+# URIs must be oci/http(s)/s3/gs/az/file (no hf://): the Hugging Face page of the model.
+#
+# Developer Hub's OpenShift AI connector links a served model to its card through two annotations on
+# the LLMInferenceService (models/<model>/llminferenceservice.yaml):
+#   rhdh.io/catalog-source: platform_models
+#   rhdh.io/catalog-model:  <name below>
+# and publishes the card as the TechDocs of the AiModelServerAPI entity (AI Catalog in Developer Hub).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-catalog-sources
+  namespace: rhoai-model-registries
+data:
+  sources.yaml: |
+    model_catalogs:
+      - name: Platform models
+        id: platform_models
+        enabled: true
+        type: yaml
+        properties:
+          yamlCatalogPath: platform-models.yaml
+        labels:
+          - Platform models
+    labels:
+      - name: Platform models
+        assetType: models
+        displayName: Platform models
+        description: The models this platform serves through Models-as-a-Service (vLLM on OpenShift AI).
+  platform-models.yaml: |
+    source: Platform models
+    models:
+      - name: Qwen/Qwen3-0.6B
+        provider: Alibaba Cloud
+        description: >-
+          Smallest model of the Qwen3 family (0.6B parameters), served on vLLM (CPU) and published
+          through Models-as-a-Service as qwen3-0-6b. Tool calling enabled: the default model of the
+          Developer Hub intelligent assistant and the Gen AI playground.
+        license: apache-2.0
+        licenseLink: https://www.apache.org/licenses/LICENSE-2.0
+        language: [en, zh, fr, de, es]
+        tasks: [text-generation]
+        createTimeSinceEpoch: "1745884800000"
+        lastUpdateTimeSinceEpoch: "1762819200000"
+        customProperties:
+          model_type:
+            metadataType: MetadataStringValue
+            string_value: generative
+        artifacts:
+          - uri: https://huggingface.co/Qwen/Qwen3-0.6B
+            createTimeSinceEpoch: "1745884800000"
+            lastUpdateTimeSinceEpoch: "1762819200000"
+        readme: |
+          # Qwen3-0.6B on this platform
+
+          | | |
+          |---|---|
+          | Served as | `qwen3-0-6b` (LLMInferenceService, namespace `maas-models`) |
+          | Runtime | vLLM CPU (Red Hat AI Inference Server), 8k context (`--max-model-len=8192`) |
+          | Endpoint | `https://maas.<apps-domain>/maas-models/qwen3-0-6b/v1` (OpenAI compatible) |
+          | Access | Models-as-a-Service API key + subscription (free / premium token quotas) |
+          | Features | tool calling (`--enable-auto-tool-choice`, hermes parser), reasoning in `<think>` |
+
+          ## Good for
+          * tool calling / MCP with a small context: the intelligent assistant in Developer Hub
+          * short question answering, classification, routing (model-router alias `small`)
+
+          ## Not for
+          * long documents: 8k tokens hold the prompt, the tool definitions and the answer
+          * high quality writing or code: use a larger model or the `openai` alias of the model-router
+
+          ## Use it
+          ```bash
+          curl https://maas.<apps-domain>/maas-models/qwen3-0-6b/v1/chat/completions \
+            -H "Authorization: Bearer $MAAS_API_KEY" -H "Content-Type: application/json" \
+            -d '{"model":"qwen3-0-6b","messages":[{"role":"user","content":"Hello"}]}'
+          ```
+          Or create an application with the Developer Hub template **LLM application** and pick
+          this model.
+      - name: google/gemma-3-270m-it
+        provider: Google
+        description: >-
+          Smallest instruction-tuned Gemma 3 model (270M parameters), served on vLLM (CPU) and
+          published through Models-as-a-Service as gemma-3-270m-it. Gated on Hugging Face.
+        license: gemma
+        licenseLink: https://ai.google.dev/gemma/terms
+        language: [en]
+        tasks: [text-generation]
+        createTimeSinceEpoch: "1755043200000"
+        lastUpdateTimeSinceEpoch: "1762819200000"
+        customProperties:
+          model_type:
+            metadataType: MetadataStringValue
+            string_value: generative
+        artifacts:
+          - uri: https://huggingface.co/google/gemma-3-270m-it
+            createTimeSinceEpoch: "1755043200000"
+            lastUpdateTimeSinceEpoch: "1762819200000"
+        readme: |
+          # Gemma 3 270M instruct on this platform
+
+          | | |
+          |---|---|
+          | Served as | `gemma-3-270m-it` (LLMInferenceService, namespace `maas-models`) |
+          | Runtime | vLLM CPU (Red Hat AI Inference Server) |
+          | Endpoint | `https://maas.<apps-domain>/maas-models/gemma-3-270m-it/v1` (OpenAI compatible) |
+          | Access | Models-as-a-Service API key + subscription (free / premium token quotas) |
+
+          ## Good for
+          * very fast, cheap answers to simple questions (the LLM application template uses it for
+            the use case FOOD QUESTIONS)
+          * demos of model routing and MaaS quotas
+
+          ## Not for
+          * tool calling / MCP: a 270M model does not call tools reliably
+          * anything that needs reasoning or long context
+
+          ## Use it
+          ```bash
+          curl https://maas.<apps-domain>/maas-models/gemma-3-270m-it/v1/chat/completions \
+            -H "Authorization: Bearer $MAAS_API_KEY" -H "Content-Type: application/json" \
+            -d '{"model":"gemma-3-270m-it","messages":[{"role":"user","content":"Hello"}]}'
+          ```

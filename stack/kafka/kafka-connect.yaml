@@ -18,11 +18,13 @@ metadata:
 spec:
   replicas: 1
   bootstrapServers: platform-kafka-bootstrap:9092
+  # Dedicated fields (required by the kafka.strimzi.io/v1 schema of Streams for Apache Kafka 3.2.2+;
+  # with them only in .spec.config the operator upgrade fails "validation is too restrictive").
+  groupId: debezium-connect
+  offsetStorageTopic: debezium-connect-offsets
+  configStorageTopic: debezium-connect-configs
+  statusStorageTopic: debezium-connect-status
   config:
-    group.id: debezium-connect
-    offset.storage.topic: debezium-connect-offsets
-    config.storage.topic: debezium-connect-configs
-    status.storage.topic: debezium-connect-status
     config.storage.replication.factor: 1
     offset.storage.replication.factor: 1
     status.storage.replication.factor: 1

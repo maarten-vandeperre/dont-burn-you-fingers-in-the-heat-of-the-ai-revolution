@@ -4,7 +4,7 @@ Developer Hub templates (Create > Choose a template) that start new projects on 
 
 | Template | What it creates |
 |---|---|
-| `llm-app/` | "LLM application": Quarkus + LangChain4j backend, React (Vite + Tailwind) UI, Dockerfile, OpenShift manifests. Two form steps: metadata (name, description, package name) and model selection (use case, t-shirt size). |
+| `llm-app/` | "LLM application": Quarkus + LangChain4j backend, React (Vite + Tailwind) UI, Dockerfile, OpenShift manifests, TechDocs (`mkdocs.yml`, `docs/`). Two form steps: metadata (name, description, package name) and model selection (use case, t-shirt size, optionally a model served by OpenShift AI). Deploys itself through Argo CD (`argocd:create-resources`). |
 
 How they get into Developer Hub: `./deploy.sh gitlab` pushes this repository (with the cluster's
 GitLab host and apps domain filled in) to GitLab `ai-platform/platform`, and the catalog Location

@@ -1,7 +1,10 @@
 # Developer Hub software template: a small application that answers questions with a model managed
-# by the platform. The form never shows model names: the platform maps
-#   use case  -> model and system prompt     (values.modelId below, UseCase.java in the skeleton)
+# by the platform. The platform maps
+#   use case  -> system prompt (UseCase.java in the skeleton) and, unless a model is picked, the model
+#   model     -> optional: any model OpenShift AI serves through MaaS (catalog Resource, tag vllm)
 #   t-shirt   -> max input text and answer length
+# The result: GitLab repository with TechDocs (mkdocs.yml, docs/), catalog entry, and an Argo CD
+# application (argocd:create-resources) that deploys deploy/ and starts the first build.
 # __GITLAB_HOST__ / __APPS_DOMAIN__ are filled in by ./deploy.sh gitlab when this repo is pushed.
 apiVersion: scaffolder.backstage.io/v1beta3
 kind: Template
@@ -9,10 +12,10 @@ metadata:
   name: llm-app
   title: LLM application (Quarkus, LangChain4j, React)
   description: >-
-    A small question answering application on the platform's models. You pick the use case and
-    the size; the platform picks and runs the model. Generates the code, a GitLab repository,
-    OpenShift manifests and the catalog entry.
-  tags: [recommended, quarkus, langchain4j, react, ai]
+    A small question answering application on the platform's models. You pick the use case, the
+    size and (optionally) the model from the OpenShift AI catalog. Generates the code, a GitLab
+    repository, TechDocs, OpenShift manifests and the catalog entry, and deploys it with Argo CD.
+  tags: [recommended, quarkus, langchain4j, react, ai, argocd, techdocs]
   links:
     - url: https://__GITLAB_HOST__/ai-platform/platform/-/tree/main/app/software-templates/llm-app
       title: Template source
@@ -62,6 +65,20 @@ spec:
             - SMALL (max 200 characters text)
             - MEDIUM (max 1000 characters text)
             - LARGE (max 5000 characters text)
+        model:
+          title: Model (optional)
+          type: string
+          description: >-
+            A model OpenShift AI serves through Models-as-a-Service (see the AI Catalog). Leave it
+            empty and the platform picks the model that fits the use case.
+          ui:field: EntityPicker
+          ui:options:
+            allowArbitraryValues: false
+            defaultKind: Resource
+            catalogFilter:
+              - kind: Resource
+                spec.type: ai-model
+                metadata.tags: vllm
 
   steps:
     - id: fetch
@@ -80,8 +97,9 @@ spec:
           packagePath: ${{ parameters.packageName | replace(".", "/") }}
           useCase: ${{ parameters.useCase }}
           size: ${{ parameters.size }}
-          # platform policy (not shown in the form)
-          modelId: ${{ "gemma-3-270m-it" if parameters.useCase == "FOOD_QUESTIONS" else "qwen3-0-6b" }}
+          # the model picked in the form, else the platform policy for the use case
+          modelId: ${{ (parameters.model | parseEntityRef | pick('name')) if parameters.model else ("gemma-3-270m-it" if parameters.useCase == "FOOD_QUESTIONS" else "qwen3-0-6b") }}
+          modelSource: ${{ "the developer, in the Developer Hub template" if parameters.model else "the platform policy for the use case " + parameters.useCase }}
           maxChars: ${{ 200 if parameters.size == "SMALL" else (1000 if parameters.size == "MEDIUM" else 5000) }}
           maxTokens: ${{ 256 if parameters.size == "SMALL" else (512 if parameters.size == "MEDIUM" else 1024) }}
           gitlabHost: __GITLAB_HOST__
@@ -92,7 +110,9 @@ spec:
       action: publish:gitlab
       input:
         repoUrl: __GITLAB_HOST__?owner=ai-platform&repo=${{ parameters.name }}
-        description: ${{ parameters.description }}
+        # Backstage 1.54 (Developer Hub 2.1): GitLab project fields go under settings
+        settings:
+          description: ${{ parameters.description }}
         defaultBranch: main
         repoVisibility: public
 
@@ -103,6 +123,19 @@ spec:
         repoContentsUrl: ${{ steps.publish.output.repoContentsUrl }}
         catalogInfoPath: /catalog-info.yaml
 
+    # GitOps: an Argo CD project + application (OpenShift GitOps) that syncs deploy/ into the
+    # namespace <name>; the BuildConfig in there starts the first build on its own
+    - id: argocd
+      name: Deploy with Argo CD
+      action: argocd:create-resources
+      input:
+        appName: ${{ parameters.name }}
+        argoInstance: openshift-gitops
+        namespace: ${{ parameters.name }}
+        repoUrl: https://__GITLAB_HOST__/ai-platform/${{ parameters.name }}.git
+        path: deploy
+        labelValue: ${{ parameters.name }}
+
   output:
     links:
       - title: Repository
@@ -110,11 +143,16 @@ spec:
       - title: Open in the catalog
         icon: catalog
         entityRef: ${{ steps.register.output.entityRef }}
+      - title: Argo CD application
+        url: https://openshift-gitops-server-openshift-gitops.__APPS_DOMAIN__/applications/openshift-gitops/${{ parameters.name }}
+      - title: Open the application (after the first build, ~5 min)
+        url: https://${{ parameters.name }}-${{ parameters.name }}.__APPS_DOMAIN__
     text:
       - title: Next steps
         content: |
-          Build and deploy on OpenShift (see the README in the repository):
+          Argo CD deploys `deploy/` into the namespace `${{ parameters.name }}` and the first build
+          starts by itself (catalog > ${{ parameters.name }} > CD and Topology tabs). The
+          documentation is on the Docs tab. Give the application its MaaS API key:
 
-              oc apply -k deploy/
               oc create secret generic llm-credentials -n ${{ parameters.name }} --from-literal=LLM_API_KEY=<your MaaS API key>
-              oc start-build ${{ parameters.name }} -n ${{ parameters.name }} --follow
+              oc rollout restart deployment/${{ parameters.name }} -n ${{ parameters.name }}
