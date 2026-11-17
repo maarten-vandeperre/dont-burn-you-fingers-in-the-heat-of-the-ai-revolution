@@ -1,0 +1,72 @@
+# Part G, persona: platform engineer. One namespace for the MCP gateway. Its own Gateway (same
+# openshift-default class as llm-gateway), so the LLM API's gateway-wide policies (Part F) don't
+# apply to MCP traffic and the other way round.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mcp-gateway
+  labels:
+    app.kubernetes.io/part-of: ai-gateways-demo
+    openshift.io/user-monitoring: "true"
+---
+# Two listeners on the same port:
+#   mcp       the public MCP endpoint: https://mcp-gateway.<apps-domain>/mcp (one URL, all tools)
+#   internal  *.mcp.local: the hostnames of the backend MCP servers' HTTPRoutes. Clients never use
+#             them; the MCP gateway routes tools/call there (and the broker reaches the servers
+#             through them, so Connectivity Link policies on those routes apply to every call).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: mcp-gateway
+  namespace: mcp-gateway
+  annotations:
+    networking.istio.io/service-type: ClusterIP
+spec:
+  gatewayClassName: openshift-default
+  listeners:
+    - name: mcp
+      hostname: REPLACED-BY-KUSTOMIZE
+      port: 8080
+      protocol: HTTP
+      allowedRoutes:
+        namespaces: {from: Same}
+    - name: internal
+      hostname: "*.mcp.local"
+      port: 8080
+      protocol: HTTP
+      allowedRoutes:
+        namespaces: {from: Same}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: mcp-gateway
+  namespace: mcp-gateway
+  annotations:
+    haproxy.router.openshift.io/timeout: 180s     # ask_model waits for a CPU model
+spec:
+  host: REPLACED-BY-KUSTOMIZE
+  to: {kind: Service, name: mcp-gateway-openshift-default}
+  port: {targetPort: 8080}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+---
+# Turns the Gateway into an MCP gateway. The operator deploys the MCP broker/router next to it
+# and an EnvoyFilter on the Gateway's Envoy:
+#   - initialize / tools/list on /mcp go to the broker, which federates the tools of every
+#     MCPServerRegistration (prefixed, so names never clash)
+#   - tools/call: the router (ext_proc in Envoy) reads the tool name, strips the prefix and
+#     re-routes the request to that server's HTTPRoute, with header x-mcp-toolname set
+apiVersion: mcp.kuadrant.io/v1alpha1
+kind: MCPGatewayExtension
+metadata:
+  name: mcp-gateway
+  namespace: mcp-gateway
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: mcp-gateway
+    namespace: mcp-gateway        # required in practice: empty -> "gateway target /mcp-gateway not found"
+    sectionName: mcp
+  # the Service openshift-default creates is <gateway>-openshift-default (not <gateway>-istio)
+  privateHost: mcp-gateway-openshift-default.mcp-gateway.svc.cluster.local:8080

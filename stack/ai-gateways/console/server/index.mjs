@@ -17,6 +17,7 @@ import yaml from 'js-yaml'
 import { Agent, fetch } from 'undici'
 
 const NS = process.env.NAMESPACE || 'ai-gateways'
+const MCP_NS = process.env.MCP_NAMESPACE || 'mcp-gateway'
 const PORT = Number(process.env.PORT || 8080)
 const CONSUMERS = (process.env.CONSUMERS || 'alice,bob').split(',').map((s) => s.trim()).filter(Boolean)
 const SA_DIR = '/var/run/secrets/kubernetes.io/serviceaccount'
@@ -54,7 +55,19 @@ const KINDS = {
   route: `/apis/route.openshift.io/v1/namespaces/${NS}/routes`,
   pod: `/api/v1/namespaces/${NS}/pods`,
 }
+// Part G objects live in their own namespace
+const MCP_KINDS = {
+  route: `/apis/route.openshift.io/v1/namespaces/${MCP_NS}/routes`,
+  gateway: `/apis/gateway.networking.k8s.io/v1/namespaces/${MCP_NS}/gateways`,
+  httproute: `/apis/gateway.networking.k8s.io/v1/namespaces/${MCP_NS}/httproutes`,
+  mcpgatewayextension: `/apis/mcp.kuadrant.io/v1alpha1/namespaces/${MCP_NS}/mcpgatewayextensions`,
+  mcpserverregistration: `/apis/mcp.kuadrant.io/v1alpha1/namespaces/${MCP_NS}/mcpserverregistrations`,
+  authpolicy: `/apis/kuadrant.io/v1/namespaces/${MCP_NS}/authpolicies`,
+  ratelimitpolicy: `/apis/kuadrant.io/v1/namespaces/${MCP_NS}/ratelimitpolicies`,
+  telemetrypolicy: `/apis/extensions.kuadrant.io/v1alpha1/namespaces/${MCP_NS}/telemetrypolicies`,
+}
 const get = (kind, name) => k8s('GET', `${KINDS[kind]}/${name}`)
+const getMcp = (kind, name) => k8s('GET', `${MCP_KINDS[kind]}/${name}`)
 const mergePatch = (kind, name, patch) => k8s('PATCH', `${KINDS[kind]}/${name}`, patch, 'application/merge-patch+json')
 const jsonPatch = (kind, name, ops) => k8s('PATCH', `${KINDS[kind]}/${name}`, ops, 'application/json-patch+json')
 
@@ -66,7 +79,10 @@ async function getEndpoints() {
   endpoints = {
     gateway: process.env.GATEWAY_URL || `https://${await host('llm-gateway')}`,
     praxisLimited: process.env.PRAXIS_LIMITED_URL || `https://${await host('praxis-ai-limited')}`,
+    // Part G is optional: null when ./deploy.sh ai-gateways mcp hasn't run
+    mcp: process.env.MCP_URL || await getMcp('route', 'mcp-gateway').then((r) => `https://${r.spec.host}/mcp`).catch(() => null),
   }
+  if (!endpoints.mcp) setTimeout(() => { endpoints = null }, 60_000)   // look again later
   return endpoints
 }
 const keyCache = new Map()
@@ -155,6 +171,55 @@ async function burst({ consumer: who, target = 'cl', count = 10 }) {
   return { url, results }
 }
 
+// ------------------------------------------------------------------------------------ MCP (Part G)
+// A minimal Streamable HTTP MCP client: one session per consumer, re-initialized when the
+// gateway no longer knows it. Answers can be JSON or SSE ("data: {...}").
+const mcpSessions = new Map()
+const MCP_HEADERS = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }
+async function mcpPost(url, key, body, session) {
+  const res = await fetch(url, {
+    method: 'POST', dispatcher: insecure, body: JSON.stringify(body),
+    headers: { ...MCP_HEADERS, Authorization: `APIKEY ${key}`, ...(session ? { 'mcp-session-id': session } : {}) },
+  })
+  const text = await res.text()
+  const data = text.split('\n').filter((l) => l.startsWith('data: ')).map((l) => l.slice(6)).join('') || text
+  let json = null
+  try { json = JSON.parse(data) } catch { /* empty 401/403/429 bodies */ }
+  return { status: res.status, json, text, session: res.headers.get('mcp-session-id') }
+}
+async function mcpSession(url, key, who, fresh = false) {
+  if (!fresh && mcpSessions.has(who)) return mcpSessions.get(who)
+  const init = await mcpPost(url, key, { jsonrpc: '2.0', id: 1, method: 'initialize',
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'ai-gateway-console', version: '1' } } })
+  if (init.status !== 200 || !init.session) throw Object.assign(new Error(`initialize: HTTP ${init.status}`), { status: init.status })
+  await mcpPost(url, key, { jsonrpc: '2.0', method: 'notifications/initialized' }, init.session)
+  mcpSessions.set(who, init.session)
+  return init.session
+}
+async function mcp({ consumer: who, method = 'tools/list', name, arguments: args = {} }) {
+  const { mcp: url } = await getEndpoints()
+  if (!url) throw Object.assign(new Error('MCP gateway not deployed: ./deploy.sh ai-gateways mcp'), { status: 404 })
+  const c = await consumer(who)
+  const body = { jsonrpc: '2.0', id: Date.now(), method, params: method === 'tools/call' ? { name, arguments: args } : {} }
+  const t0 = performance.now()
+  let r
+  try {
+    r = await mcpPost(url, c.key, body, await mcpSession(url, c.key, who))
+    if (r.status === 400 || r.status === 404) r = await mcpPost(url, c.key, body, await mcpSession(url, c.key, who, true))   // stale session
+  } catch (e) { r = { status: e.status || 0, json: null, text: e.message } }
+  const ms = Math.round(performance.now() - t0)
+  const out = {
+    status: r.status, ms, consumer: who, tier: c.tier, method, tool: name || null,
+    tools: r.json?.result?.tools?.map((t) => ({ name: t.name, description: t.description })) || null,
+    text: r.json?.result?.content?.map((x) => x.text).join('\n') ?? null,
+    isError: r.json?.result?.isError || false,
+    error: r.json?.error?.message || (r.status >= 400 ? (r.text || '').slice(0, 200) : null),
+  }
+  record({ consumer: who, tier: c.tier, api: 'mcp', model: method === 'tools/call' ? name : method, served: null,
+    status: r.status, ms, tokens: null, prompt: args?.prompt ? String(args.prompt).slice(0, 80) : '', note: 'MCP gateway' })
+  return out
+}
+
 // ------------------------------------------------------------------------------------ knobs
 const THROTTLE_RE = /(- name: throttle\s*\n\s*filters:\s*\n\s*- filter: rate_limit\s*\n\s*mode: \w+\s*\n\s*rate: )(\d+)([^\n]*\n\s*burst: )(\d+)/
 
@@ -216,6 +281,13 @@ const LIVE = {
   'trlp': ['tokenratelimitpolicy', 'llm-api-tokens'], 'telemetry': ['telemetrypolicy', 'llm-gateway-telemetry'],
   'servicemonitor': ['servicemonitor', 'praxis-ai'],
 }
+const LIVE_MCP = {
+  'mcp-gateway': ['gateway', 'mcp-gateway'], 'mcp-extension': ['mcpgatewayextension', 'mcp-gateway'],
+  'mcp-reg-models': ['mcpserverregistration', 'models'], 'mcp-reg-ops': ['mcpserverregistration', 'ops'],
+  'mcp-route-ops': ['httproute', 'mcp-ops'], 'mcp-auth': ['authpolicy', 'mcp-auth'],
+  'mcp-ops-tools': ['authpolicy', 'mcp-ops-tools'], 'mcp-limits': ['ratelimitpolicy', 'mcp-tool-limits'],
+  'mcp-telemetry': ['telemetrypolicy', 'mcp-telemetry'],
+}
 function tidy(obj) {
   const out = { apiVersion: obj.apiVersion, kind: obj.kind, metadata: { name: obj.metadata.name, namespace: obj.metadata.namespace } }
   out.spec = obj.spec
@@ -235,6 +307,11 @@ async function liveYaml(ref) {
     if (listeners.length) sel.listeners = listeners
     if (chains.length) sel.filter_chains = chains
     return `# live: ConfigMap ${NS}/praxis-ai-config, key praxis-ai.yaml (selected parts, comments stripped)\n` + yaml.dump(sel, { lineWidth: 140, noRefs: true })
+  }
+  if (LIVE_MCP[ref]) {
+    const [kind, name] = LIVE_MCP[ref]
+    const obj = await getMcp(kind, name)
+    return `# live: oc get ${kind} ${name} -n ${MCP_NS} -o yaml (spec + status)\n` + yaml.dump(tidy(obj), { lineWidth: 140, noRefs: true })
   }
   const target = LIVE[ref]
   if (!target) throw Object.assign(new Error(`unknown ref ${ref}`), { status: 400 })
@@ -260,6 +337,8 @@ const QUERIES = {
   clusterRequests: `sum by (cluster, status_class) (praxis_http_requests_total{namespace="${NS}"})`,
   clusterLatency: `sum by (cluster) (praxis_http_request_duration_seconds_sum{namespace="${NS}"}) / sum by (cluster) (praxis_http_request_duration_seconds_count{namespace="${NS}"})`,
   gatewayP95: `histogram_quantile(0.95, sum by (le, destination_service_name) (rate(istio_request_duration_milliseconds_bucket{namespace="${NS}", source_workload="llm-gateway-openshift-default"}[10m])))`,
+  mcpToolCalls: `sum by (user, tier, tool, limitador_namespace) (authorized_calls{limitador_namespace=~"${MCP_NS}/.*", tool!=""})`,
+  mcpToolLimited: `sum by (user, tier, tool, limitador_namespace) (limited_calls{limitador_namespace=~"${MCP_NS}/.*", tool!=""})`,
   gatewayCodes: `sum by (response_code) (increase(istio_requests_total{namespace="${NS}", source_workload="llm-gateway-openshift-default"}[30m]))`,
 }
 async function metrics() {
@@ -294,6 +373,7 @@ app.get('/api/config', h(async () => {
 }))
 app.post('/api/chat', h((req) => chat(req.body)))
 app.post('/api/burst', h((req) => burst(req.body)))
+app.post('/api/mcp', h((req) => mcp(req.body)))
 app.get('/api/knobs', h(() => knobs()))
 app.put('/api/throttle', h((req) => setThrottle(req.body)))
 app.put('/api/tokens', h((req) => setTokens(req.body)))

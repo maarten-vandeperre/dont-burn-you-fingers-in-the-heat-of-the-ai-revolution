@@ -33,7 +33,8 @@ this repository, see the Camel model router (`auto` alias) in
 [demo 1](01-models-and-rag.md).
 
 **Duration:** 25 minutes for Parts A to E (5 Part A, 6 Part B, 5 Part C, 4 Part D, 5 Part E), plus
-20 minutes for Part F (Connectivity Link + Praxis, with the AI Gateway Console). Each part also
+20 minutes for Part F (Connectivity Link + Praxis, with the AI Gateway Console) and 10 minutes for
+Part G (an MCP gateway through Connectivity Link). Each part also
 works on its own; Part F is the one to pick for a "what does an AI gateway do for me" audience.
 
 ```
@@ -305,6 +306,28 @@ a weak tool caller anyway. Try your real client and a capable model before you p
   ```promql
   sum by (model) (rate(praxis_ai_output_tokens_total{namespace="ai-gateways"}[5m]))
   ```
+  Then ask "how many calls, and how much did we send in?". Run each query on its own (in
+  **Observe > Metrics**, add a second query with **Add query**) and use the **Table** view; over
+  the last 15 minutes:
+  ```promql
+  # requests per model (answered by a model, with token usage)
+  sum by (model) (increase(praxis_ai_prompt_tokens_count{namespace="ai-gateways"}[15m]))
+
+  # input (prompt) tokens per model
+  sum by (model) (increase(praxis_ai_prompt_tokens_total{namespace="ai-gateways"}[15m]))
+  ```
+  Add `/ on (model)` to get the average prompt size per call:
+  ```promql
+  sum by (model) (increase(praxis_ai_prompt_tokens_total{namespace="ai-gateways"}[15m]))
+    / on (model)
+  sum by (model) (increase(praxis_ai_prompt_tokens_count{namespace="ai-gateways"}[15m]))
+  ```
+  To count *every* request, including the ones that never reached a model (the 429s of A4, the
+  `/v1/models` answered by `catalog-v1`), use the HTTP counter. It has no `model` label, only the
+  upstream `cluster` (`none` = Praxis answered itself) and the status class:
+  ```promql
+  sum by (cluster, status_class) (increase(praxis_http_requests_total{namespace="ai-gateways"}[15m]))
+  ```
 * **What happens:** nothing new is sent; you read what A1 and A2 left behind. In the `models` chain,
   response filters run in reverse order, so `token_count` (`provider: openai`) reads the OpenAI
   `usage` block of every answer *before* A2's translation rewrites it, and adds it to
@@ -312,12 +335,17 @@ a weak tool caller anyway. Try your real client and a capable model before you p
   `time_to_first_token` measures the time until the first response byte (`praxis_ai_ttft_seconds`).
   For streams there's normally no `usage` at all; `stream_usage_inject` adds
   `stream_options.include_usage: true` to every streaming request, so vLLM sends a final chunk with
-  usage that `token_count` can read. Praxis exposes all of it on `:9902/metrics`; the
+  usage that `token_count` can read. Each token metric is also a summary, so it comes with a
+  `_count` (the number of answers measured, i.e. model calls) and a `_sum`: that's where the
+  request count of the second query comes from. Praxis exposes all of it on `:9902/metrics`; the
   `ServiceMonitor praxis-ai` ([`deployment.yaml`](../../stack/ai-gateways/praxis/deployment.yaml))
   makes OpenShift's user-workload Prometheus scrape it every 15 s, and `./deploy.sh ai-gateways
   metrics` reads the endpoint directly with `oc exec`.
 * **You see:** `praxis_ai_prompt_tokens_total`, `praxis_ai_output_tokens_total` and
-  `praxis_ai_ttft_seconds` labelled by `model` and `cluster`.
+  `praxis_ai_ttft_seconds` labelled by `model` and `cluster`; in the second query one row per
+  model with its number of calls and its input tokens (e.g. `qwen3-0-6b`: 3 calls, 45 tokens).
+  `increase()` extrapolates, so expect values like `3.04` rather than `3`. Prometheus scrapes
+  every 15 s: give a fresh call 15–30 s before it shows up. Models you haven't called show `0`.
 * **Say:** "Token accounting from the gateway, not from the model server. `stream_usage_inject`
   turns on `include_usage` for every streaming request, so streamed tokens count too."
 
@@ -334,6 +362,67 @@ a weak tool caller anyway. Try your real client and a capable model before you p
 * **You see:** of 20 parallel requests, 5 pass (200: Praxis answers `/v1/models` itself) and 15 get **429**.
 * **Say:** "That's a token bucket on requests, the same for everybody. Praxis has no idea who is
   calling, so it can't give alice and bob different limits. That's where Connectivity Link comes in."
+
+**Where it's configured.** One filter in one chain of
+[`praxis-ai.yaml`](../../stack/ai-gateways/praxis/praxis-ai.yaml):
+
+```yaml
+listeners:
+  - name: limited                     # Route praxis-ai-limited -> Service port 8081
+    address: "0.0.0.0:8081"
+    filter_chains: [observability, throttle, catalog-v1, classify, translate, models]
+...
+filter_chains:
+  - name: throttle
+    filters:
+      - filter: rate_limit
+        mode: global      # one bucket for the whole listener (per_ip: one bucket per client IP)
+        rate: 5           # tokens added per second: the sustained rate
+        burst: 5          # bucket size: how many can pass at once
+```
+
+The file becomes ConfigMap `praxis-ai-config` (kustomize `configMapGenerator`, fixed name, in
+[`kustomization.yaml`](../../stack/ai-gateways/praxis/kustomization.yaml)), mounted at
+`/etc/praxis` and hot-reloaded (A5). Only the `limited` listener has the `throttle` chain, so
+`direct`, `api-v1`/`api-v2` etc. are not affected.
+
+Which number decides the burst result: the 20 requests arrive within a few milliseconds, so the
+bucket refills next to nothing during the burst. **`burst` decides how many pass; `rate` decides
+how fast the bucket refills afterwards** (= the steady state when requests keep coming). With
+`rate: 10, burst: 5` you'd still see 5 × 200; with `rate: 5, burst: 10` you'd see 10 × 200, but
+then only 5 per second after that. To say "10 per second" and see it in the burst, set both.
+
+**Change it in the demo: 10 pass, 10 × 429.** Pick one way:
+
+* **Console** (easiest on stage): **Throttle 5 req/s** → limiter **Praxis (per listener)** → under
+  *Change the Praxis rate_limit* set `10` and apply. It sets `rate` *and* `burst` to 10 in the
+  ConfigMap and nudges the pod (an annotation change makes the kubelet sync the volume sooner).
+  The code panel next to it shows the live `throttle` chain from the cluster, so the audience sees
+  the new numbers. Then **Fire 20**.
+* **Terminal, live edit:**
+  ```bash
+  oc edit configmap praxis-ai-config -n ai-gateways     # in chain throttle: rate: 10, burst: 10
+  oc logs -f deploy/praxis-ai -n ai-gateways | grep -m1 'reload complete'   # 5 s to ~1 min
+  ./deploy.sh ai-gateways burst                         # first half: 10 x 200, 10 x 429
+  ```
+  Or non-interactively:
+  ```bash
+  oc get cm praxis-ai-config -n ai-gateways -o jsonpath='{.data.praxis-ai\.yaml}' \
+    | sed -E '/name: throttle$/,/burst:/{s/rate: [0-9]+/rate: 10/;s/burst: [0-9]+/burst: 10/;}' > /tmp/praxis-ai.yaml
+  oc create configmap praxis-ai-config -n ai-gateways --from-file=praxis-ai.yaml=/tmp/praxis-ai.yaml \
+    --dry-run=client -o yaml | oc apply -f -
+  ```
+* **GitOps / permanent:** change `rate`/`burst` in
+  [`praxis-ai.yaml`](../../stack/ai-gateways/praxis/praxis-ai.yaml) and
+  `oc apply -k stack/ai-gateways/praxis` (or `./deploy.sh ai-gateways deploy`). Note that this is
+  also what *undoes* a live edit: the repo file is the source of truth.
+
+Back to 5/5: **Reset limits** in the console header, or the same edit with `5`. The new bucket
+starts full (`burst` tokens) after every reload, so you don't have to wait before firing.
+
+Tested on this cluster: `rate: 10, burst: 10`, reload after ~30 s, 20 parallel → `10 × 200`,
+`10 × 429`. The 429s are also counted in `praxis_rate_limit_limited_total` and, with
+`cluster="none", status_class="4xx"`, in the `praxis_http_requests_total` query of A3.
 
 **A5. Hot reload.** (optional)
 * **Do:** `oc edit configmap praxis-ai-config -n ai-gateways`, change `rate: 5` to `rate: 50`, then
@@ -418,6 +507,68 @@ a weak tool caller anyway. Try your real client and a capable model before you p
 * **Say:** "This isn't counting requests. The wasm filter in Envoy reads `usage.total_tokens` from
   every model response and charges it to alice's counter in Limitador. Her next request after the
   counter goes over 300 is refused, and bob has his own counter."
+
+**Where the 300 tokens/min is configured.** In
+[`token-rate-limit-policy.yaml`](../../stack/ai-gateways/connectivity-link/token-rate-limit-policy.yaml),
+and it needs two values the `AuthPolicy` hands over:
+
+```yaml
+# token-rate-limit-policy.yaml: TokenRateLimitPolicy llm-models-tokens (namespace ai-gateways)
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: llm-models}  # only this route
+  limits:
+    free:                                          # a name of your choice (shows up in Limitador)
+      rates:
+        - limit: 300                               # <- the 300: TOKENS (usage.total_tokens) ...
+          window: 1m                               # <- ... per minute
+      when:
+        - predicate: auth.identity.tier == "free"  # which callers this limit applies to
+      counters:
+        - expression: auth.identity.userid         # one counter PER consumer, not one shared
+    gold:
+      rates: [{limit: 20000, window: 1m}]
+      when: [{predicate: auth.identity.tier == "gold"}]
+      counters: [{expression: auth.identity.userid}]
+```
+
+```yaml
+# auth-policy.yaml: AuthPolicy llm-models-auth, where auth.identity.tier / .userid come from
+    response:
+      success:
+        filters:
+          identity:
+            json:
+              properties:
+                userid: {expression: auth.identity.metadata.name}                         # Secret name: llm-key-alice
+                tier:   {expression: 'auth.identity.metadata.annotations["llm-gateway/tier"]'}  # annotation: free
+```
+
+So the chain is: the API key → its Secret `llm-key-alice` → annotation `llm-gateway/tier: free`
+(set by `./deploy.sh ai-gateways key alice free`) → `auth.identity.tier == "free"` → limit `free`
+→ 300 tokens per minute on alice's own counter. Kuadrant translates the policy into a Limitador
+limit and into wasm-shim config on the `llm-gateway` Envoy; nobody edits Limitador directly.
+
+Two levers, two different demos:
+* **Change the limit for everybody on a tier** (e.g. free → 1000 tokens/min):
+  ```bash
+  oc patch tokenratelimitpolicy llm-models-tokens -n ai-gateways --type merge \
+    -p '{"spec":{"limits":{"free":{"rates":[{"limit":1000,"window":"1m"}]}}}}'
+  oc get tokenratelimitpolicy llm-models-tokens -n ai-gateways \
+    -o jsonpath='{.status.conditions[?(@.type=="Enforced")].status}'   # True after a few seconds
+  ```
+  Or `oc edit tokenratelimitpolicy llm-models-tokens -n ai-gateways`. No restart: Kuadrant pushes
+  the new limit to Limitador within seconds. Counters already running keep their tokens; the
+  new limit is checked against them from the next request on.
+* **Move one consumer to another tier** (alice → gold, so 20 000 tokens/min and both models):
+  `./deploy.sh ai-gateways key alice gold`. That only changes the annotation on her Secret; the
+  policy stays as it is.
+
+Permanent: change the number in the YAML file and `oc apply -k stack/ai-gateways/connectivity-link`
+(or `./deploy.sh ai-gateways deploy`, which also undoes a live patch). Not to be confused with
+**Part F**: there the same idea is `TokenRateLimitPolicy llm-api-tokens` in
+[`api-policies.yaml`](../../stack/ai-gateways/connectivity-link/api-policies.yaml) on the
+`llm-gateway` Gateway, with limits `api-free` 500 and `api-gold` 20 000 tokens/min (console page
+**Token limits**, which patches that policy).
 
 **B4. The policies are visible as objects.**
 * **Do:**
@@ -1054,6 +1205,254 @@ telemetry. Platform defaults with per-API overrides, no copy-paste.
 
 ---
 
+## Part G: an MCP gateway through Connectivity Link (10 minutes)
+
+**The story:** agents use tools over MCP (Model Context Protocol). Without a gateway, every agent
+gets a URL and a credential per MCP server, and every server does its own authentication,
+authorization and limits, if any. The **MCP Gateway** (Connectivity Link, `mcp.kuadrant.io`,
+preview) puts one MCP endpoint in front of all of them. It **federates** the tools of every
+registered server under a prefix, and **routes** each `tools/call` to the server that owns the
+tool. Along the way it turns the tool name from the JSON-RPC body into a **header**, and that
+makes ordinary Connectivity Link policies work **per tool**. Same pattern as Part F: one component
+reads the body (there Praxis, here the MCP router), Connectivity Link decides on headers and identity.
+
+```
+                           namespace mcp-gateway
+ agent ──HTTPS──▶  Gateway mcp-gateway, listener "mcp"   POST /mcp  (JSON-RPC)
+ APIKEY sk-llm-…     AuthPolicy mcp-auth: API key ─▶ 401 without
+                     │
+                     ├─ initialize / tools/list ──▶ broker (deploy/mcp-gateway): one session, all tools
+                     │                                 models_list_models, models_ask_model,
+                     │                                 ops_get_limits, ops_set_throttle
+                     │
+                     └─ tools/call ─▶ router (ext_proc in the gateway's Envoy) reads the body:
+                                      sets x-mcp-method: tools/call, x-mcp-toolname: set_throttle,
+                                      strips the prefix, re-routes the same request to listener "internal":
+                         HTTPRoute mcp-models (models.mcp.local) ─▶ mcp-models pod  (ask_model → Praxis → Gemma/Qwen)
+                         HTTPRoute mcp-ops    (ops.mcp.local)    ─▶ mcp-ops pod     (patches RateLimitPolicy llm-api-throttle)
+                           AuthPolicy mcp-ops-tools: set_throttle = gold only     ─▶ 403
+                           RateLimitPolicy mcp-tool-limits: ask_model 3/min free  ─▶ 429
+                           TelemetryPolicy mcp-telemetry: metrics per user, tier, tool
+```
+
+The two MCP servers are small demo servers from one file,
+[`servers/server.py`](../../stack/ai-gateways/mcp-gateway/servers/server.py) (Python standard
+library, no image build). `models` lists the cluster's LLMs and asks one of them through Praxis.
+`ops` reads and changes the Part F limits, so it has a "dangerous" tool to protect. Neither does
+any authentication itself: they're only reachable through the gateway.
+
+| Scenario | Where | YAML ([`stack/ai-gateways/mcp-gateway/`](../../stack/ai-gateways/mcp-gateway/)) |
+|---|---|---|
+| G1 One MCP endpoint, tools of two servers | MCP Gateway | `gateway.yaml`: Gateway + `MCPGatewayExtension`; `servers/registrations.yaml`: HTTPRoute + `MCPServerRegistration` per server |
+| G2 No key, no session | Connectivity Link | `policies.yaml`: `AuthPolicy mcp-auth` |
+| G3 Authorization per tool | Connectivity Link | `policies.yaml`: `AuthPolicy mcp-ops-tools` |
+| G4 Rate limit per tool | Connectivity Link | `policies.yaml`: `RateLimitPolicy mcp-tool-limits` |
+| G5 Who called which tool | Connectivity Link | `policies.yaml`: `TelemetryPolicy mcp-telemetry` |
+
+### Before you start
+
+* `./deploy.sh ai-gateways mcp` (once, about 3 minutes). It installs the **MCP Gateway operator**
+  (Red Hat Operators catalog, channel `preview`, [`operator/subscription.yaml`](../../stack/ai-gateways/mcp-gateway/operator/subscription.yaml))
+  and applies `stack/ai-gateways/mcp-gateway`. It needs Parts A to F deployed: the consumer keys
+  (alice, bob) are the same, `ask_model` uses Praxis, and the `ops` tools manage Part F's limits.
+* Console: **MCP gateway** (group *MCP (Part G)*). Terminal: `./deploy.sh ai-gateways mcp-test`.
+* By hand, an MCP session is three POSTs (the gateway returns a session id on `initialize`):
+  ```bash
+  source stack/ai-gateways/.keys.env
+  MCP=https://$(oc get route mcp-gateway -n mcp-gateway -o jsonpath='{.spec.host}')/mcp
+  H=(-H 'content-type: application/json' -H 'accept: application/json, text/event-stream')
+  mcp_init() {   # mcp_init <key> -> prints the session id
+    curl -sk -D - -o /dev/null "$MCP" "${H[@]}" -H "Authorization: APIKEY $1" \
+      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1"}}}' \
+      | tr -d '\r' | awk -F': ' 'tolower($1)=="mcp-session-id"{print $2}'; }
+  mcp_rpc() {    # mcp_rpc <key> <session> <method> [params-json] [extra curl args...]
+    local key=$1 sess=$2 method=$3 params=${4:-'{}'}; shift 4 2>/dev/null || shift $#
+    curl -sk "$MCP" "${H[@]}" -H "Authorization: APIKEY $key" -H "mcp-session-id: $sess" "$@" -w '  HTTP %{http_code}\n' \
+      -d "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"$method\",\"params\":$params}"; }
+  SA=$(mcp_init $KEY_ALICE); SB=$(mcp_init $KEY_BOB)
+  mcp_rpc $KEY_ALICE $SA notifications/initialized >/dev/null
+  mcp_rpc $KEY_BOB   $SB notifications/initialized >/dev/null
+  ```
+  Any MCP client works the same way: point it at `$MCP` with the header
+  `Authorization: APIKEY <key>` (e.g. MCP Inspector, or Claude Code with
+  `claude mcp add --transport http platform $MCP --header "Authorization: APIKEY $KEY_BOB"`).
+
+**G1. One MCP endpoint, the tools of two servers.** Console: *MCP gateway*, the tool list.
+* **Do:** `mcp_rpc $KEY_BOB $SB tools/list | jq -r '.result.tools[].name'`, then
+  `mcp_rpc $KEY_BOB $SB tools/call '{"name":"models_ask_model","arguments":{"prompt":"What is an MCP gateway?","max_tokens":40}}'`.
+* **What happens:** `initialize` and `tools/list` on `/mcp` go to the **broker** (Deployment
+  `mcp-gateway`, created by the operator). It has its own connection to every server in its config
+  (written by the operator from the `MCPServerRegistration`s), lists their tools and adds each
+  registration's prefix. A `tools/call` goes through the **router**, an `ext_proc` filter that the
+  operator put into the Gateway's Envoy (EnvoyFilter `mcp-ext-proc-…`). It parses the JSON-RPC
+  body, finds the server that owns `models_ask_model`, rewrites the tool name to `ask_model`, sets
+  `x-mcp-method` / `x-mcp-toolname`, opens (or reuses) a session with that server, and points the
+  request at Host `models.mcp.local`. Envoy then routes it like any request: `HTTPRoute mcp-models` →
+  Service `mcp-models`. The tool calls Praxis (`direct` listener), which calls Gemma.
+* **You see:** four tools from two servers (`models_*`, `ops_*`) plus the gateway's own
+  `discover_tools` / `select_tools` (meta-tools that let an agent browse and narrow a large tool
+  set), and an answer from Gemma.
+* **Say:** "One URL and one credential for the agent, whatever number of MCP servers sits behind
+  it. Adding a server is an HTTPRoute and a registration; no agent changes."
+* **Configured by** ([`gateway.yaml`](../../stack/ai-gateways/mcp-gateway/gateway.yaml),
+  [`servers/registrations.yaml`](../../stack/ai-gateways/mcp-gateway/servers/registrations.yaml)):
+  ```yaml
+  kind: Gateway
+  metadata: {name: mcp-gateway, namespace: mcp-gateway}
+  spec:
+    gatewayClassName: openshift-default
+    listeners:
+      - {name: mcp,      hostname: mcp-gateway.<apps-domain>, port: 8080, protocol: HTTP}   # agents
+      - {name: internal, hostname: "*.mcp.local",             port: 8080, protocol: HTTP}   # MCP servers
+  ---
+  kind: MCPGatewayExtension                # mcp.kuadrant.io/v1alpha1
+  metadata: {name: mcp-gateway, namespace: mcp-gateway}
+  spec:
+    targetRef: {group: gateway.networking.k8s.io, kind: Gateway, name: mcp-gateway,
+                namespace: mcp-gateway, sectionName: mcp}
+    privateHost: mcp-gateway-openshift-default.mcp-gateway.svc.cluster.local:8080
+  ---
+  kind: HTTPRoute                          # one per MCP server, on the internal listener
+  metadata: {name: mcp-ops, namespace: mcp-gateway}
+  spec:
+    parentRefs: [{name: mcp-gateway, sectionName: internal}]
+    hostnames: [ops.mcp.local]
+    rules:
+      - matches: [{path: {type: PathPrefix, value: /mcp}}]
+        backendRefs: [{name: mcp-ops, port: 8080}]
+  ---
+  kind: MCPServerRegistration
+  metadata: {name: ops, namespace: mcp-gateway}
+  spec:
+    targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: mcp-ops}
+    prefix: ops_                           # set_throttle -> ops_set_throttle
+    hint: "Operate the LLM API gateway: read and change its rate limits."
+    category: [operations]                 # used by discover_tools
+  ```
+
+**G2. No key, no session.**
+* **Do:** `mcp_init sk-wrong` (or `curl … -d '<initialize>'` without `Authorization`).
+* **What happens:** `AuthPolicy mcp-auth` targets the Gateway, so it applies to every route on it.
+  Authorino looks for a consumer Secret (label `llm-gateway/consumer=true`, the same Secrets as
+  the LLM API) with that key. None → **401**, before the broker is reached. With a key, it publishes
+  `auth.identity.userid` / `tier` for the limits and metrics.
+* **Say:** "Same identities as the LLM API. An agent's key is a consumer like any other."
+* **Configured by** ([`policies.yaml`](../../stack/ai-gateways/mcp-gateway/policies.yaml)):
+  ```yaml
+  kind: AuthPolicy
+  metadata: {name: mcp-auth, namespace: mcp-gateway}
+  spec:
+    targetRef: {group: gateway.networking.k8s.io, kind: Gateway, name: mcp-gateway}
+    rules:
+      authentication:
+        api-key-consumers:
+          apiKey: {allNamespaces: true, selector: {matchLabels: {llm-gateway/consumer: "true"}}}
+          credentials: {authorizationHeader: {prefix: APIKEY}}
+      response:
+        success:
+          filters:
+            identity: {json: {properties: {userid: ..., tier: ...}}}
+  ```
+
+**G3. Authorization per tool.** Console: *MCP gateway*, **Run scenario** (or the **call** buttons as alice / bob).
+* **Do:**
+  ```bash
+  mcp_rpc $KEY_ALICE $SA tools/call '{"name":"ops_get_limits","arguments":{}}'                     # 200
+  mcp_rpc $KEY_ALICE $SA tools/call '{"name":"ops_set_throttle","arguments":{"requests_per_second":5}}'  # 403
+  mcp_rpc $KEY_ALICE $SA tools/call '{"name":"ops_set_throttle","arguments":{"requests_per_second":5}}' -H 'x-mcp-toolname: get_limits'  # still 403
+  mcp_rpc $KEY_BOB   $SB tools/call '{"name":"ops_set_throttle","arguments":{"requests_per_second":5}}'  # 200
+  ```
+* **What happens:** after the router re-routes the call to `HTTPRoute mcp-ops`, Kuadrant applies
+  that route's own `AuthPolicy mcp-ops-tools` (it replaces the gateway default for this route,
+  which is why it repeats the authentication). Its CEL rule reads the headers the router set: a
+  `tools/call` of `set_throttle` needs tier `gold`. The router writes `x-mcp-toolname` from the body,
+  overwriting what the client sent, so faking the header doesn't help. Everything that isn't a
+  `tools/call` (the router's own `initialize` towards the server) passes, so the denial is a clean
+  **403** instead of a broken session.
+* **Say:** "Tool-level permissions without touching the MCP server, as a policy owned by the
+  platform. The server doesn't even know who's calling."
+* **Configured by:**
+  ```yaml
+  kind: AuthPolicy
+  metadata: {name: mcp-ops-tools, namespace: mcp-gateway}
+  spec:
+    targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: mcp-ops}
+    rules:
+      authentication: {api-key-consumers: ...}    # same as mcp-auth
+      authorization:
+        gold-may-change-limits:
+          patternMatching:
+            patterns:
+              - predicate: >-
+                  request.headers["x-mcp-method"] != "tools/call" ||
+                  request.headers["x-mcp-toolname"] != "set_throttle" ||
+                  auth.identity.metadata.annotations["llm-gateway/tier"] == "gold"
+  ```
+
+**G4. Rate limit per tool.**
+* **Do:** `for i in 1 2 3 4; do mcp_rpc $KEY_ALICE $SA tools/call '{"name":"models_ask_model","arguments":{"prompt":"hi","max_tokens":5}}'; done`, then once as bob.
+* **What happens:** `RateLimitPolicy mcp-tool-limits` (on the Gateway) has two limits whose `when`
+  predicates read the router's headers. `tool-calls` counts every `tools/call` per consumer (30 per
+  minute); `ask-model-free` counts only `ask_model` calls by the free tier (3 per minute). The 4th
+  call in the minute is answered **429** by Envoy and never reaches the server, or the LLM behind it.
+* **Say:** "The expensive tool gets its own budget, per consumer and per tier, like tokens on the LLM API."
+* **Configured by:**
+  ```yaml
+  kind: RateLimitPolicy
+  metadata: {name: mcp-tool-limits, namespace: mcp-gateway}
+  spec:
+    targetRef: {group: gateway.networking.k8s.io, kind: Gateway, name: mcp-gateway}
+    limits:
+      tool-calls:
+        rates: [{limit: 30, window: 1m}]
+        when:
+          - predicate: '"x-mcp-method" in request.headers && request.headers["x-mcp-method"] == "tools/call"'
+        counters: [{expression: auth.identity.userid}]
+      ask-model-free:
+        rates: [{limit: 3, window: 1m}]
+        when:
+          - predicate: '"x-mcp-method" in request.headers && request.headers["x-mcp-method"] == "tools/call"'
+          - predicate: '"x-mcp-toolname" in request.headers && request.headers["x-mcp-toolname"] == "ask_model"'
+          - predicate: auth.identity.tier == "free"
+        counters: [{expression: auth.identity.userid}]
+  ```
+  The `"…" in request.headers &&` guards matter: the policy is on the Gateway, so it also sees
+  `initialize` and `tools/list`, which don't carry these headers.
+
+**G5. Who called which tool.** Console: *MCP gateway*, the bottom table (refreshes every 10 s).
+* **Do:** in **Observe > Metrics**:
+  ```promql
+  sum by (user, tool, limitador_namespace) (authorized_calls{limitador_namespace=~"mcp-gateway/.*"})
+  sum by (user, tool) (limited_calls{limitador_namespace=~"mcp-gateway/.*"})
+  ```
+* **What happens:** `TelemetryPolicy mcp-telemetry` makes the wasm filter send `user`, `tier` and
+  `tool` with every Limitador call, and Limitador puts them on its counters, as in F8.
+  `limitador_namespace` is `mcp-gateway/<route>`, so it also says which MCP server.
+* **You see:** per consumer, per tool, per server: allowed calls and 429s. The 403s of G3 aren't
+  there: the AuthPolicy refuses them before the rate limiter is asked (they're in the gateway's
+  access log and Authorino's metrics).
+* **Configured by:**
+  ```yaml
+  kind: TelemetryPolicy
+  metadata: {name: mcp-telemetry, namespace: mcp-gateway}
+  spec:
+    targetRef: {group: gateway.networking.k8s.io, kind: Gateway, name: mcp-gateway}
+    metrics:
+      default:
+        labels:
+          user: auth.identity.userid
+          tier: auth.identity.tier
+          tool: '"x-mcp-toolname" in request.headers ? request.headers["x-mcp-toolname"] : "none"'
+  ```
+
+**Why its own Gateway?** The `mcp-gateway` Gateway is separate from `llm-gateway`, so Part F's
+gateway-wide policies (5 requests per second, token limits) don't apply to MCP traffic and vice
+versa. One MCP session easily makes several requests per second (initialize, notifications,
+tools/list, calls), and token limits make no sense for tool calls. Both Gateways use the same
+consumer keys, the same Authorino and Limitador, and the same Prometheus.
+
+---
+
 **When to use which**
 
 | You need | Use |
@@ -1064,6 +1463,7 @@ telemetry. Platform defaults with per-API overrides, no copy-paste.
 | Keep confidential and personal data away from models | **NeMo Guardrails** for the policy, enforced by **Praxis** (`ai_guardrails`) or called by the app / TrustyAI orchestrator |
 | The prompt decides which model answers (context-based routing) | none of the three out of the box: the Camel model router ([demo 1](01-models-and-rag.md)) |
 | One LLM API for internal teams: keys, quotas, versions, metrics per consumer, **and** aliases, OpenAI egress with guardrails, data that must stay local | **Connectivity Link in front of Praxis** (Part F) |
+| One MCP endpoint for agents, with authentication, per-tool permissions, limits and metrics | **Connectivity Link MCP Gateway** (Part G, preview) |
 
 ---
 
@@ -1585,6 +1985,8 @@ Open these files (**Shift twice**, type the name):
 | `api-routes.yaml` (ai-gateways/connectivity-link) | Part F: path and header versioning, `Deprecation` / `Sunset` / `Link`, `remove: [Authorization]` |
 | `api-policies.yaml` | Part F: Gateway-level AuthPolicy injecting `x-consumer-tier`, RateLimitPolicy 5/s, TokenRateLimitPolicy, TelemetryPolicy |
 | `praxis-ai.yaml`, end of file | Part F: `model_to_provider` table, `tier-gate`, `data-classification`, the `openai-egress` listener with `guardrails` and `credential_injection` |
+| `mcp-gateway/gateway.yaml`, `servers/registrations.yaml` | Part G: the two listeners, `MCPGatewayExtension`, an MCP server = HTTPRoute + `MCPServerRegistration` with a prefix |
+| `mcp-gateway/policies.yaml` | Part G: the `x-mcp-toolname` / `x-mcp-method` headers in a CEL rule, a rate-limit `when`, a TelemetryPolicy label |
 | `console/server/index.mjs` | what each console button does (`chat`, `burst`, `setThrottle`, `setTokens`, the PromQL) |
 | `ai-gateways.sh` | `key` (a consumer is just a labelled Secret), `compare`, `burst`, `guard`, `api`, `openai-key`, `console` |
 
@@ -1597,12 +1999,14 @@ Open these files (**Shift twice**, type the name):
 ./deploy.sh ai-gateways test        # Praxis 200/200/404/200 + guarded 200/403, Connectivity Link 401/200/403/200, MaaS 401
 ./deploy.sh ai-gateways compare     # Praxis, Connectivity Link, MaaS, Praxis->MaaS (OpenAI + Anthropic): all 200
 ./deploy.sh ai-gateways guard       # NeMo via Praxis: 200 / 403 / answer blocked / <EMAIL_ADDRESS> masked
-./deploy.sh ai-gateways burst       # Praxis: 4 pass, 16 x 429; Connectivity Link: alice 429 after ~300 tokens
+./deploy.sh ai-gateways burst       # Praxis: 5 pass, 15 x 429; Connectivity Link: alice 429 after ~300 tokens
 ./deploy.sh ai-gateways metrics     # Praxis token/TTFT metrics, Limitador counters for ai-gateways/llm-models
 ./deploy.sh ai-gateways api         # Part F: versioning, aliases, local vs OpenAI, guardrails 403, tier gate, throttle 5x200/5x429
 ./deploy.sh ai-gateways status
 ./deploy.sh ai-gateways openai-key  # store $OPENAI_API_KEY for Praxis (OpenAI egress), restart Praxis
 ./deploy.sh ai-gateways console     # rebuild + redeploy the AI Gateway Console after a change in stack/ai-gateways/console
+./deploy.sh ai-gateways mcp         # Part G: MCP Gateway operator + namespace mcp-gateway (servers, policies)
+./deploy.sh ai-gateways mcp-test    # Part G: 401 without key, tools/list, set_throttle 403/200, ask_model 3x200 + 429
 ```
 
 The console can also run on your laptop against the cluster, e.g. while changing it:
@@ -1620,7 +2024,7 @@ npm run dev                 # UI on http://localhost:5173 (proxies /api)
 oc apply -k stack/ai-gateways/praxis          # undo live ConfigMap edits (hot-reloads)
 oc apply -k stack/ai-gateways/connectivity-link   # undo patched limits (or: console, "Reset limits")
 ./deploy.sh ai-gateways key alice free        # put alice back on free (same key)
-./deploy.sh ai-gateways destroy               # namespace ai-gateways + the two ReferenceGrants;
+./deploy.sh ai-gateways destroy               # namespaces ai-gateways and mcp-gateway + the two ReferenceGrants;
                                               # MaaS, Connectivity Link and the models stay
 ```
 
@@ -1666,6 +2070,34 @@ Part F (Connectivity Link + Praxis, console):
   third consumer key needs a line there (and `CONSUMERS` in the Deployment).
 * **Console metrics tables stay empty:** wait for a scrape (Praxis every 15 s, Limitador 30 s), and
   check the ClusterRoleBinding `ai-gateway-console-monitoring-view` (Thanos querier access).
+
+Part G (MCP gateway):
+
+* **`MCPGatewayExtension` not ready: `gateway target /mcp-gateway not found`:** set
+  `targetRef.namespace` explicitly, even when the Gateway is in the same namespace.
+* **The broker reaches the servers but `tools/call` is 500, `server returned 4xx for initialize
+  POST, likely a legacy SSE server` in `oc logs deploy/mcp-gateway -n mcp-gateway`:** the router
+  opens its own session with the server *through the gateway* (Host `<server>.mcp.local`). Check the
+  gateway's access log for that request. Here it was the demo server: the router sends its body
+  `Transfer-Encoding: chunked`, which Python's `http.server` doesn't decode by itself (fixed in
+  `server.py`, `_body()`). Also check `privateHost`: with the `openshift-default` class the Service
+  is `<gateway>-openshift-default`, not the `<gateway>-istio` the operator assumes by default.
+* **A registration stays `NotReady` ("mcp server is not present in gateway yet") for a minute:**
+  the operator writes the server into Secret `mcp-gateway-config`, mounted into the broker; it
+  takes effect when the kubelet syncs that volume.
+* **An MCP server that needs its own token doesn't work for `tools/call`:** `credentialRef` on a
+  registration is used by the broker for discovery only, never sent on a client's `tools/call`.
+  Put the server's authentication into Connectivity Link instead (as here), or use the per-user
+  token flow (`tokenURLElicitation`).
+* **`400` instead of `401` without a key:** the router rejects a body that isn't JSON-RPC before
+  authentication runs. Send a real `initialize`.
+* **Every MCP request is a 500, `gRPC status code is not OK` in the gateway log:** the Authorino
+  TLS fix is missing for this Gateway (`oc get envoyfilter mcp-gateway-authn-ssl -n mcp-gateway`), as for `llm-gateway`.
+* **`authpolicy/mcp-auth` says "partially enforced":** expected. `mcp-ops` has its own AuthPolicy,
+  which replaces the gateway default on that route.
+* **A session id from one consumer works for another:** sessions aren't bound to the key. Every
+  request is still authenticated and authorized with the key it carries, so bob using alice's
+  session still acts as bob.
 
 Parts A to E:
 

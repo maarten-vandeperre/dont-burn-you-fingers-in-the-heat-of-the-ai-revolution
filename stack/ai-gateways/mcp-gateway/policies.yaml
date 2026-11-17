@@ -1,0 +1,139 @@
+# Part G, persona: platform engineer / API owner. Connectivity Link policies on MCP traffic.
+#
+# How a tools/call travels: the client POSTs /mcp on the public listener; the MCP router (ext_proc
+# in the gateway's Envoy) reads the JSON-RPC body, strips the tool prefix, sets
+#   x-mcp-method: tools/call      x-mcp-toolname: set_throttle      (prefix removed)
+# and re-routes the same request to the server's HTTPRoute on the internal listener
+# (ops.mcp.local). The Kuadrant policies on THAT route then see the tool name as a header: the
+# body-reading is done by the MCP gateway, the decisions by Connectivity Link (same split as
+# Praxis + Connectivity Link in Part F).
+#
+# Consumers are the same API key Secrets as the LLM API (alice = free, bob = gold).
+
+# 1. Who may use the MCP gateway at all: every route on the Gateway (default).
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: mcp-auth
+  namespace: mcp-gateway
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: mcp-gateway
+  rules:
+    authentication:
+      api-key-consumers:
+        apiKey:
+          allNamespaces: true            # the key Secrets live in ai-gateways
+          selector:
+            matchLabels:
+              llm-gateway/consumer: "true"
+        credentials:
+          authorizationHeader:
+            prefix: APIKEY
+    response:
+      success:
+        filters:
+          identity:                      # auth.identity.userid / .tier for limits and metrics
+            json:
+              properties:
+                userid:
+                  expression: auth.identity.metadata.name
+                tier:
+                  expression: auth.identity.metadata.annotations["llm-gateway/tier"]
+---
+# 2. Who may call which tool: the ops server's route gets its own AuthPolicy (it replaces the
+#    gateway default for this route, so authentication is repeated). set_throttle changes a
+#    production limit: gold only. Everything that isn't a tools/call (the router's initialize
+#    towards the server) passes, so the session can be set up and the denial is a clean 403.
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: mcp-ops-tools
+  namespace: mcp-gateway
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: mcp-ops
+  rules:
+    authentication:
+      api-key-consumers:
+        apiKey:
+          allNamespaces: true
+          selector:
+            matchLabels:
+              llm-gateway/consumer: "true"
+        credentials:
+          authorizationHeader:
+            prefix: APIKEY
+    authorization:
+      gold-may-change-limits:
+        patternMatching:
+          patterns:
+            - predicate: >-
+                request.headers["x-mcp-method"] != "tools/call" ||
+                request.headers["x-mcp-toolname"] != "set_throttle" ||
+                auth.identity.metadata.annotations["llm-gateway/tier"] == "gold"
+    response:
+      success:
+        filters:
+          identity:
+            json:
+              properties:
+                userid:
+                  expression: auth.identity.metadata.name
+                tier:
+                  expression: auth.identity.metadata.annotations["llm-gateway/tier"]
+---
+# 3. Rate limits per tool: tool calls in general, and ask_model (it runs an LLM) much tighter
+#    for the free tier. Counters per consumer.
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: mcp-tool-limits
+  namespace: mcp-gateway
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: mcp-gateway
+  limits:
+    tool-calls:
+      rates:
+        - limit: 30
+          window: 1m
+      when:
+        - predicate: '"x-mcp-method" in request.headers && request.headers["x-mcp-method"] == "tools/call"'
+      counters:
+        - expression: auth.identity.userid
+    ask-model-free:
+      rates:
+        - limit: 3
+          window: 1m
+      when:
+        - predicate: '"x-mcp-method" in request.headers && request.headers["x-mcp-method"] == "tools/call"'
+        - predicate: '"x-mcp-toolname" in request.headers && request.headers["x-mcp-toolname"] == "ask_model"'
+        - predicate: auth.identity.tier == "free"
+      counters:
+        - expression: auth.identity.userid
+---
+# 4. Metrics per consumer AND per tool: Limitador's authorized_calls / limited_calls get the
+#    labels user, tier and tool (from the header the MCP router set).
+apiVersion: extensions.kuadrant.io/v1alpha1
+kind: TelemetryPolicy
+metadata:
+  name: mcp-telemetry
+  namespace: mcp-gateway
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: mcp-gateway
+  metrics:
+    default:
+      labels:
+        user: auth.identity.userid
+        tier: auth.identity.tier
+        tool: '"x-mcp-toolname" in request.headers ? request.headers["x-mcp-toolname"] : "none"'

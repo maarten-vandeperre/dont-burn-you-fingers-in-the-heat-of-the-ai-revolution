@@ -1,0 +1,51 @@
+# Part G, persona: MCP server owner. Publishing a server on the MCP gateway = an HTTPRoute on the
+# gateway's internal listener + an MCPServerRegistration pointing at it. The prefix keeps tool
+# names unique across servers: list_models -> models_list_models, set_throttle -> ops_set_throttle.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mcp-models
+  namespace: mcp-gateway
+spec:
+  parentRefs:
+    - {name: mcp-gateway, sectionName: internal}
+  hostnames: [models.mcp.local]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /mcp}}]
+      backendRefs: [{name: mcp-models, port: 8080}]
+      timeouts: {request: 0s, backendRequest: 0s}   # ask_model waits for a CPU model
+---
+apiVersion: mcp.kuadrant.io/v1alpha1
+kind: MCPServerRegistration
+metadata:
+  name: models
+  namespace: mcp-gateway
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: mcp-models}
+  prefix: models_
+  hint: "The LLMs served by OpenShift AI on this cluster: list them, ask them a question."
+  category: [ai]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mcp-ops
+  namespace: mcp-gateway
+spec:
+  parentRefs:
+    - {name: mcp-gateway, sectionName: internal}
+  hostnames: [ops.mcp.local]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /mcp}}]
+      backendRefs: [{name: mcp-ops, port: 8080}]
+---
+apiVersion: mcp.kuadrant.io/v1alpha1
+kind: MCPServerRegistration
+metadata:
+  name: ops
+  namespace: mcp-gateway
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: mcp-ops}
+  prefix: ops_
+  hint: "Operate the LLM API gateway: read and change its rate limits."
+  category: [operations]

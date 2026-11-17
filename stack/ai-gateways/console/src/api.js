@@ -12,6 +12,7 @@ export const api = {
   config: () => call('GET', '/api/config'),
   chat: (b) => call('POST', '/api/chat', b),
   burst: (b) => call('POST', '/api/burst', b),
+  mcp: (b) => call('POST', '/api/mcp', b),
   knobs: () => call('GET', '/api/knobs'),
   throttle: (b) => call('PUT', '/api/throttle', b),
   tokens: (b) => call('PUT', '/api/tokens', b),

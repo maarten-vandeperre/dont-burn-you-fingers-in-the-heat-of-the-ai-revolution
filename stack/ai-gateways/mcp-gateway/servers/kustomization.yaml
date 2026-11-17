@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - rbac.yaml
+  - deployment.yaml
+  - registrations.yaml
+configMapGenerator:
+  - name: demo-mcp-code
+    namespace: mcp-gateway
+    files:
+      - server.py
+generatorOptions:
+  labels:
+    app.kubernetes.io/part-of: ai-gateways-demo

@@ -1,0 +1,34 @@
+# Lets the AI Gateway Console (ServiceAccount ai-gateways/ai-gateway-console) find the MCP endpoint
+# and show the Part G objects "live from the cluster". Read-only. Lives here, not in console/,
+# because this namespace only exists once ./deploy.sh ai-gateways mcp has run.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ai-gateway-console-read
+  namespace: mcp-gateway
+rules:
+  - apiGroups: [route.openshift.io]
+    resources: [routes]
+    resourceNames: [mcp-gateway]
+    verbs: [get]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gateways, httproutes]
+    verbs: [get]
+  - apiGroups: [mcp.kuadrant.io]
+    resources: [mcpgatewayextensions, mcpserverregistrations]
+    verbs: [get]
+  - apiGroups: [kuadrant.io]
+    resources: [authpolicies, ratelimitpolicies]
+    verbs: [get]
+  - apiGroups: [extensions.kuadrant.io]
+    resources: [telemetrypolicies]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ai-gateway-console-read
+  namespace: mcp-gateway
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: ai-gateway-console-read}
+subjects:
+  - {kind: ServiceAccount, name: ai-gateway-console, namespace: ai-gateways}

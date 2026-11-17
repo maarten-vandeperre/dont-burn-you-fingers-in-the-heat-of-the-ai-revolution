@@ -1,0 +1,32 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# The operator (operator/) is installed separately by ./deploy.sh ai-gateways mcp: its CRDs must
+# exist before these resources can be applied.
+resources:
+  - gateway.yaml
+  - envoyfilter-authorino-tls.yaml
+  - servers
+  - policies.yaml
+  - console-rbac.yaml
+
+configMapGenerator:
+  - name: mcp-gateway-cluster-params
+    envs:
+      - cluster-params.env
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: mcp-gateway-cluster-params
+      fieldPath: data.MCP_GATEWAY_HOSTNAME
+    targets:
+      - select: {kind: Gateway, name: mcp-gateway}
+        fieldPaths:
+          - spec.listeners.[name=mcp].hostname
+      - select: {kind: Route, name: mcp-gateway}
+        fieldPaths:
+          - spec.host

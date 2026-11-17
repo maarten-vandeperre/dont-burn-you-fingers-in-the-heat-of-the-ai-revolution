@@ -1,0 +1,13 @@
+# Red Hat Connectivity Link MCP Gateway operator (mcp.kuadrant.io), channel preview.
+# Installed cluster-wide (openshift-operators has the global OperatorGroup).
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: mcp-gateway
+  namespace: openshift-operators
+spec:
+  channel: preview
+  name: mcp-gateway
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic

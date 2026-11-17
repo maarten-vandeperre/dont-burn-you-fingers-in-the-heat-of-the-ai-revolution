@@ -407,4 +407,153 @@ spec:
       path: /metrics
       interval: 15s`,
   },
+
+  // ----------------------------------------------------------------------------- MCP gateway (Part G)
+  mcpGateway: {
+    title: 'Gateway + MCPGatewayExtension',
+    file: 'stack/ai-gateways/mcp-gateway/gateway.yaml',
+    owner: 'Connectivity Link · platform engineer',
+    live: 'mcp-extension',
+    focus: ['kind: MCPGatewayExtension', 'sectionName: mcp', '*.mcp.local', 'privateHost', 'name: mcp'],
+    why: 'A plain Gateway with two listeners: the public /mcp endpoint and *.mcp.local for the backend servers. The MCPGatewayExtension makes it an MCP gateway: the operator deploys the broker/router and an ext_proc EnvoyFilter on the Gateway.',
+    code: `kind: Gateway
+metadata: {name: mcp-gateway, namespace: mcp-gateway}
+spec:
+  gatewayClassName: openshift-default
+  listeners:
+    - name: mcp                         # https://mcp-gateway.<apps>/mcp
+      hostname: mcp-gateway.<apps-domain>
+      port: 8080
+      protocol: HTTP
+    - name: internal                    # backend MCP servers' routes
+      hostname: "*.mcp.local"
+      port: 8080
+      protocol: HTTP
+---
+kind: MCPGatewayExtension               # mcp.kuadrant.io/v1alpha1
+metadata: {name: mcp-gateway, namespace: mcp-gateway}
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: mcp-gateway
+    namespace: mcp-gateway
+    sectionName: mcp
+  # openshift-default names the Service <gateway>-openshift-default
+  privateHost: mcp-gateway-openshift-default.mcp-gateway.svc.cluster.local:8080`,
+  },
+  mcpRegistration: {
+    title: 'HTTPRoute + MCPServerRegistration',
+    file: 'stack/ai-gateways/mcp-gateway/servers/registrations.yaml',
+    owner: 'Connectivity Link · MCP server owner',
+    live: 'mcp-reg-ops',
+    focus: ['prefix: ops_', 'kind: MCPServerRegistration', 'ops.mcp.local', 'sectionName: internal', 'targetRef'],
+    why: 'Publishing an MCP server = a route on the internal listener + a registration pointing at it. The broker federates its tools under a prefix (set_throttle -> ops_set_throttle), so two servers never clash.',
+    code: `kind: HTTPRoute
+metadata: {name: mcp-ops, namespace: mcp-gateway}
+spec:
+  parentRefs: [{name: mcp-gateway, sectionName: internal}]
+  hostnames: [ops.mcp.local]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /mcp}}]
+      backendRefs: [{name: mcp-ops, port: 8080}]
+---
+kind: MCPServerRegistration             # mcp.kuadrant.io/v1alpha1
+metadata: {name: ops, namespace: mcp-gateway}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: mcp-ops}
+  prefix: ops_                          # get_limits -> ops_get_limits
+  hint: "Operate the LLM API gateway: read and change its rate limits."
+  category: [operations]`,
+  },
+  mcpAuth: {
+    title: 'AuthPolicy mcp-auth (who)',
+    file: 'stack/ai-gateways/mcp-gateway/policies.yaml',
+    owner: 'Connectivity Link · platform engineer',
+    live: 'mcp-auth',
+    focus: ['kind: Gateway', 'prefix: APIKEY', 'llm-gateway/consumer'],
+    why: 'The same API keys as the LLM API, on every route of the MCP gateway: no key, no MCP session (401 on initialize).',
+    code: `kind: AuthPolicy
+metadata: {name: mcp-auth, namespace: mcp-gateway}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: Gateway, name: mcp-gateway}
+  rules:
+    authentication:
+      api-key-consumers:
+        apiKey:
+          allNamespaces: true           # key Secrets live in ai-gateways
+          selector: {matchLabels: {llm-gateway/consumer: "true"}}
+        credentials: {authorizationHeader: {prefix: APIKEY}}
+    response:
+      success:
+        filters:
+          identity: {json: {properties: {userid: ..., tier: ...}}}`,
+  },
+  mcpToolAuth: {
+    title: 'AuthPolicy mcp-ops-tools (which tool)',
+    file: 'stack/ai-gateways/mcp-gateway/policies.yaml',
+    owner: 'Connectivity Link · API owner',
+    live: 'mcp-ops-tools',
+    focus: ['x-mcp-toolname', 'x-mcp-method', 'set_throttle', '"gold"', 'name: mcp-ops'],
+    why: 'The MCP router reads the JSON-RPC body and sets x-mcp-method / x-mcp-toolname (prefix stripped, overwriting anything the client sent) before re-routing to the server\'s route. A CEL rule on that route decides per tool: set_throttle is gold only.',
+    code: `kind: AuthPolicy
+metadata: {name: mcp-ops-tools, namespace: mcp-gateway}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: mcp-ops}
+  rules:
+    authentication: {api-key-consumers: ...}     # same as mcp-auth
+    authorization:
+      gold-may-change-limits:
+        patternMatching:
+          patterns:
+            - predicate: >-
+                request.headers["x-mcp-method"] != "tools/call" ||
+                request.headers["x-mcp-toolname"] != "set_throttle" ||
+                auth.identity.metadata.annotations["llm-gateway/tier"] == "gold"`,
+  },
+  mcpLimits: {
+    title: 'RateLimitPolicy mcp-tool-limits',
+    file: 'stack/ai-gateways/mcp-gateway/policies.yaml',
+    owner: 'Connectivity Link · API owner',
+    live: 'mcp-limits',
+    focus: ['limit: 3', 'limit: 30', 'ask_model', 'auth.identity.tier == "free"'],
+    why: 'Tool calls are counted per consumer; ask_model (it runs an LLM) gets 3 per minute on the free tier.',
+    code: `kind: RateLimitPolicy
+metadata: {name: mcp-tool-limits, namespace: mcp-gateway}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: Gateway, name: mcp-gateway}
+  limits:
+    tool-calls:
+      rates: [{limit: 30, window: 1m}]
+      when:
+        - predicate: '"x-mcp-method" in request.headers && request.headers["x-mcp-method"] == "tools/call"'
+      counters: [{expression: auth.identity.userid}]
+    ask-model-free:
+      rates: [{limit: 3, window: 1m}]
+      when:
+        - predicate: '"x-mcp-method" in request.headers && request.headers["x-mcp-method"] == "tools/call"'
+        - predicate: '"x-mcp-toolname" in request.headers && request.headers["x-mcp-toolname"] == "ask_model"'
+        - predicate: auth.identity.tier == "free"
+      counters: [{expression: auth.identity.userid}]`,
+  },
+  mcpTelemetry: {
+    title: 'TelemetryPolicy mcp-telemetry',
+    file: 'stack/ai-gateways/mcp-gateway/policies.yaml',
+    owner: 'Connectivity Link · platform engineer',
+    live: 'mcp-telemetry',
+    focus: ['tool:', 'user:', 'tier:'],
+    why: 'Who called which tool: Limitador counters get user, tier and tool labels; limitador_namespace says which MCP server (route).',
+    code: `kind: TelemetryPolicy
+metadata: {name: mcp-telemetry, namespace: mcp-gateway}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: Gateway, name: mcp-gateway}
+  metrics:
+    default:
+      labels:
+        user: auth.identity.userid
+        tier: auth.identity.tier
+        tool: '"x-mcp-toolname" in request.headers ? request.headers["x-mcp-toolname"] : "none"'
+# -> authorized_calls{user="llm-key-alice", tool="ask_model",
+#                     limitador_namespace="mcp-gateway/mcp-models"}`,
+  },
 }

@@ -1,0 +1,43 @@
+# What the tools may do in the cluster, nothing more.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: mcp-models, namespace: mcp-gateway}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: mcp-ops, namespace: mcp-gateway}
+---
+# list_models: read the LLMInferenceServices in maas-models
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: mcp-models-read, namespace: maas-models}
+rules:
+  - apiGroups: [serving.kserve.io]
+    resources: [llminferenceservices]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: mcp-models-read, namespace: maas-models}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: mcp-models-read}
+subjects: [{kind: ServiceAccount, name: mcp-models, namespace: mcp-gateway}]
+---
+# get_limits / set_throttle: the two Part F policies, by name
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: mcp-ops-limits, namespace: ai-gateways}
+rules:
+  - apiGroups: [kuadrant.io]
+    resources: [ratelimitpolicies]
+    resourceNames: [llm-api-throttle]
+    verbs: [get, patch]
+  - apiGroups: [kuadrant.io]
+    resources: [tokenratelimitpolicies]
+    resourceNames: [llm-api-tokens]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: mcp-ops-limits, namespace: ai-gateways}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: mcp-ops-limits}
+subjects: [{kind: ServiceAccount, name: mcp-ops, namespace: mcp-gateway}]

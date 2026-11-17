@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { api } from './api.js'
-import { Guardrails, Identity, LedgerTable, LocalVsOpenAI, Metrics, ModelRouting, Overview, Throttle, Tokens, Versioning } from './pages.jsx'
+import { Guardrails, Identity, LedgerTable, LocalVsOpenAI, McpGateway, Metrics, ModelRouting, Overview, Throttle, Tokens, Versioning } from './pages.jsx'
 
 const PAGES = [
   { id: 'overview', label: 'Overview', group: 'Start', C: Overview },
@@ -12,6 +12,7 @@ const PAGES = [
   { id: 'versioning', label: 'API versioning', group: 'Connectivity Link', C: Versioning },
   { id: 'identity', label: 'Who may use OpenAI', group: 'Better together', C: Identity },
   { id: 'metrics', label: 'Metrics', group: 'Better together', C: Metrics },
+  { id: 'mcp', label: 'MCP gateway', group: 'MCP (Part G)', C: McpGateway },
 ]
 
 export default function App() {

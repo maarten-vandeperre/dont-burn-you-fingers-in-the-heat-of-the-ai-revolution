@@ -1,0 +1,85 @@
+# Two demo MCP servers from one file (server.py, ConfigMap demo-mcp-code), Python standard
+# library only: no image build. MCP_SERVER picks the tool set.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-models
+  namespace: mcp-gateway
+  labels: {app: mcp-models, app.kubernetes.io/part-of: ai-gateways-demo}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mcp-models}
+  template:
+    metadata:
+      labels: {app: mcp-models}
+    spec:
+      serviceAccountName: mcp-models
+      containers:
+        - name: server
+          image: registry.access.redhat.com/ubi9/python-312@sha256:d0518dd59bd42e13e33ba69c9bc2ebdf2de277f5c3e3b8072fc69b3b92ac37b7
+          command: ["python3", "-u", "/opt/demo-mcp/server.py"]
+          env:
+            - {name: MCP_SERVER, value: models}
+            - {name: PRAXIS_URL, value: "http://praxis-ai.ai-gateways.svc.cluster.local:8080"}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          volumeMounts:
+            - {name: code, mountPath: /opt/demo-mcp}
+      volumes:
+        - name: code
+          configMap: {name: demo-mcp-code}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-ops
+  namespace: mcp-gateway
+  labels: {app: mcp-ops, app.kubernetes.io/part-of: ai-gateways-demo}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mcp-ops}
+  template:
+    metadata:
+      labels: {app: mcp-ops}
+    spec:
+      serviceAccountName: mcp-ops
+      containers:
+        - name: server
+          image: registry.access.redhat.com/ubi9/python-312@sha256:d0518dd59bd42e13e33ba69c9bc2ebdf2de277f5c3e3b8072fc69b3b92ac37b7
+          command: ["python3", "-u", "/opt/demo-mcp/server.py"]
+          env:
+            - {name: MCP_SERVER, value: ops}
+            - {name: GATEWAY_NAMESPACE, value: ai-gateways}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 128Mi}
+          volumeMounts:
+            - {name: code, mountPath: /opt/demo-mcp}
+      volumes:
+        - name: code
+          configMap: {name: demo-mcp-code}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mcp-models, namespace: mcp-gateway}
+spec:
+  selector: {app: mcp-models}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mcp-ops, namespace: mcp-gateway}
+spec:
+  selector: {app: mcp-ops}
+  ports: [{name: http, port: 8080, targetPort: http}]

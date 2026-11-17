@@ -598,3 +598,134 @@ export function LedgerTable({ rows, max = 60 }) {
     </div>
   )
 }
+
+// ===================================================================================== MCP gateway (Part G)
+const MCP_PRESETS = {
+  models_list_models: {},
+  models_ask_model: { model: 'gemma-3-270m-it', prompt: 'What is an MCP gateway? One sentence.', max_tokens: 40 },
+  ops_get_limits: {},
+  ops_set_throttle: { requests_per_second: 5 },
+}
+function mcpExplain(r) {
+  if (!r) return ''
+  if (r.status === 200) return r.isError ? 'the tool ran and reported an error' : 'tool answered'
+  if (r.status === 401) return 'no / unknown API key (AuthPolicy mcp-auth)'
+  if (r.status === 403) return 'tool not allowed for this tier (AuthPolicy mcp-ops-tools)'
+  if (r.status === 429) return 'tool rate limit (RateLimitPolicy mcp-tool-limits)'
+  return r.error || ''
+}
+export function McpGateway({ consumer, cfg }) {
+  const [tools, setTools] = useState(null)
+  const [res, setRes] = useState({})
+  const [busy, setBusy] = useState('')
+  const [matrix, setMatrix] = useState({})
+  const [m, setM] = useState(null)
+  const [args, setArgs] = useState(() => Object.fromEntries(Object.entries(MCP_PRESETS).map(([k, v]) => [k, JSON.stringify(v)])))
+  const list = async () => {
+    setBusy('list')
+    setTools(await api.mcp({ consumer, method: 'tools/list' }).catch((e) => ({ status: 0, error: e.message })))
+    setBusy('')
+  }
+  useEffect(() => { if (cfg?.mcp) list() }, [consumer, cfg?.mcp])   // eslint-disable-line react-hooks/exhaustive-deps
+  const loadMetrics = () => api.metrics().then(setM).catch(() => {})
+  useEffect(() => { loadMetrics(); const t = setInterval(loadMetrics, 10000); return () => clearInterval(t) }, [])
+  const callTool = async (name, who = consumer) => {
+    let a = {}
+    try { a = JSON.parse(args[name] || '{}') } catch { /* keep {} */ }
+    return api.mcp({ consumer: who, method: 'tools/call', name, arguments: a }).catch((e) => ({ status: 0, error: e.message }))
+  }
+  const one = async (name) => { setBusy(name); const r = await callTool(name); setRes((x) => ({ ...x, [name]: r })); setBusy('') }
+  const scenario = async () => {
+    setBusy('matrix'); setMatrix({})
+    const plan = [
+      ['alice', 'ops_get_limits'], ['alice', 'ops_set_throttle'], ['bob', 'ops_set_throttle'],
+      ['alice', 'models_ask_model'], ['alice', 'models_ask_model'], ['alice', 'models_ask_model'], ['alice', 'models_ask_model'],
+      ['bob', 'models_ask_model'],
+    ]
+    for (let i = 0; i < plan.length; i++) {
+      const [who, tool] = plan[i]
+      const r = await callTool(tool, who)
+      setMatrix((x) => ({ ...x, [i]: { who, tool, r } }))
+    }
+    setBusy(''); loadMetrics()
+  }
+  if (cfg && !cfg.mcp) {
+    return (
+      <div className="space-y-3">
+        <h2 className="font-display text-2xl font-bold">MCP gateway</h2>
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          Not deployed yet. Run <code className="rounded bg-white px-1">./deploy.sh ai-gateways mcp</code> (installs the MCP Gateway operator, preview).
+        </div>
+      </div>
+    )
+  }
+  const rows = (m?.results?.mcpToolCalls || []).map((x) => ({
+    ...x.labels, calls: x.value,
+    limited: (m.results.mcpToolLimited || []).find((y) => y.labels.user === x.labels.user && y.labels.tool === x.labels.tool)?.value,
+  }))
+  return (
+    <Layout title="MCP gateway: one endpoint, every tool, policies per tool"
+      where={['Connectivity Link · MCP Gateway (MCPGatewayExtension)', 'Connectivity Link · AuthPolicy / RateLimitPolicy / TelemetryPolicy per tool']}
+      story="Agents get one MCP URL instead of one per server. The MCP gateway federates the tools of every registered server under a prefix and routes each tools/call to the right one. Because it turns the tool name into a header on the way, ordinary Connectivity Link policies can decide per tool: who may call it, how often, and who called what."
+      snippets={[S.mcpGateway, S.mcpRegistration, S.mcpAuth, S.mcpToolAuth, S.mcpLimits, S.mcpTelemetry]}>
+      <Section title={`Tools as ${consumer} sees them (tools/list on ${cfg?.mcp?.replace('https://', '') || '…'})`}
+        right={<button className="btn-ghost" disabled={!!busy} onClick={list}>Refresh</button>}>
+        {tools?.error && <p className="text-sm text-rose-700">{tools.status}: {tools.error}</p>}
+        <table className="w-full text-left text-sm">
+          <tbody>
+            {(tools?.tools || []).map((t) => {
+              const preset = Object.prototype.hasOwnProperty.call(MCP_PRESETS, t.name)
+              const r = res[t.name]
+              return (
+                <tr key={t.name} className="border-t border-slate-100 align-top">
+                  <td className="w-48 py-2 font-mono text-xs font-semibold">{t.name}</td>
+                  <td className="py-2 pr-2">
+                    <div className="text-xs text-slate-600">{t.description?.slice(0, 140)}</div>
+                    {preset && <input className="input mt-1 w-full font-mono !text-xs" value={args[t.name]} onChange={(e) => setArgs((a) => ({ ...a, [t.name]: e.target.value }))} />}
+                    {r && (
+                      <div className="mt-1 flex flex-wrap items-start gap-2">
+                        <Status s={r.status} /><span className="chip bg-white ring-1 ring-slate-200">{r.ms} ms</span>
+                        <span className="text-xs text-slate-500">{mcpExplain(r)}</span>
+                        {r.text && <pre className="w-full whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs">{r.text}</pre>}
+                      </div>
+                    )}
+                  </td>
+                  <td className="w-20 py-2 text-right">
+                    {preset ? <button className="btn-primary !px-2 !py-1 text-xs" disabled={!!busy} onClick={() => one(t.name)}>{busy === t.name ? '…' : 'call'}</button>
+                      : <span className="text-[10px] text-slate-400">gateway meta-tool</span>}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </Section>
+      <Section title="alice (free) vs bob (gold), per tool" right={<button className="btn-primary" disabled={!!busy} onClick={scenario}>{busy === 'matrix' ? 'Running…' : 'Run scenario'}</button>}>
+        <div className="space-y-1">
+          {Object.values(matrix).map((x, i) => (
+            <div key={i} className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="w-12 font-medium">{x.who}</span><span className="w-44 font-mono text-xs">{x.tool}</span>
+              <Status s={x.r.status} /><span className="text-xs text-slate-500">{mcpExplain(x.r)}</span>
+            </div>
+          ))}
+          {!Object.keys(matrix).length && <p className="text-xs text-slate-500">alice reads the limits (200) but may not change them (403); bob may. alice's 4th ask_model in a minute is 429; bob's isn't. (If you ran it less than a minute ago, alice starts at 429.)</p>}
+        </div>
+      </Section>
+      <Section title="Who called which tool — Limitador (TelemetryPolicy labels user, tier, tool)">
+        <table className="w-full text-left text-sm">
+          <thead className="text-xs text-slate-500"><tr><th className="py-1">consumer</th><th>tier</th><th>server (route)</th><th>tool</th><th>allowed</th><th>429</th></tr></thead>
+          <tbody>
+            {rows.sort((a, b) => (a.user + a.tool).localeCompare(b.user + b.tool)).map((x) => (
+              <tr key={x.user + x.tool + x.limitador_namespace} className="border-t border-slate-100">
+                <td className="py-1">{(x.user || '').replace(/^llm-key-/, '')}</td><td className="text-xs">{x.tier}</td>
+                <td className="font-mono text-xs">{(x.limitador_namespace || '').replace(/^mcp-gateway\//, '')}</td>
+                <td className="font-mono text-xs">{x.tool}</td><td>{x.calls}</td><td>{x.limited ?? '–'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="mt-2 text-[11px] text-slate-500">403s aren't counted here: the AuthPolicy refuses them before the rate limiter is asked. Prometheus scrapes Limitador every 30 s.</p>
+      </Section>
+    </Layout>
+  )
+}

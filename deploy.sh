@@ -21,9 +21,9 @@
 #               models, catalog relations, CI/CD per component): setup | llm | mcp | test |
 #               ask "<question>" | status | urls | destroy (stack/lightspeed/lightspeed.sh)
 #   ai-gateways <cmd>  Praxis AI vs. Connectivity Link vs. OpenShift AI MaaS on the same models,
-#               and Connectivity Link + Praxis as one LLM API with a web console:
+#               Connectivity Link + Praxis as one LLM API with a web console, and an MCP gateway:
 #               deploy | key | maas-key | openai-key | console | compare | test | guard | burst |
-#               api | metrics | status | urls | destroy (stack/ai-gateways/ai-gateways.sh)
+#               api | mcp | mcp-test | metrics | status | urls | destroy (stack/ai-gateways/ai-gateways.sh)
 #   rhdh        Developer Hub: render the catalog, wire tokens, enable the plugins of the running version
 #   sso         Install / update Keycloak (single sign-on) and GitLab on an existing stack
 #   gitlab      Push this repository into GitLab (group ai-platform) and register it with Argo CD
