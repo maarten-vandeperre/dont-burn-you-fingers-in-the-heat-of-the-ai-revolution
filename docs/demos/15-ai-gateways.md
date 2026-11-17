@@ -152,6 +152,58 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
   5. Same URL, `"model": "gemma-3-270m-it"` → `X-Model: gemma-3-270m-it` → cluster `gemma`.
      `"model": "gpt-4o"` → no route matches that header → Praxis answers **404** itself; no model
      server is contacted.
+* **Configured by** ([`praxis-ai.yaml`](../../stack/ai-gateways/praxis/praxis-ai.yaml), ConfigMap
+  `praxis-ai-config`). Follow `chat $P gemma-3-270m-it` through the file, top to bottom:
+  ```yaml
+  # (1) $P is Route praxis-ai -> Service praxis-ai port "direct" -> this listener
+  listeners:
+    - name: direct
+      address: "0.0.0.0:8080"
+      filter_chains: [observability, classify, translate, models]   # run in this order
+
+  filter_chains:
+    # (2) body {"model": "gemma-3-270m-it", ...}  ->  header  X-Model: gemma-3-270m-it
+    - name: classify
+      filters:
+        - filter: ai_operation
+        - filter: openai_chat_completions_request
+          conditions: [{when: {path: "/v1/chat/completions"}}]
+        - filter: model_to_header
+          header: X-Model
+
+    # (3) the header picks the cluster; the cluster says where that model runs
+    - name: models
+      filters:
+        - filter: router
+          routes:
+            - path_prefix: "/v1/"
+              headers:
+                x-model: qwen3-0-6b          # X-Model: qwen3-0-6b      -> cluster qwen
+              cluster: qwen
+            - path_prefix: "/v1/"
+              headers:
+                x-model: gemma-3-270m-it     # X-Model: gemma-3-270m-it -> cluster gemma   <- our request
+              cluster: gemma
+            # no route for x-model: gpt-4o   -> 404 from Praxis, nothing is called
+        - filter: token_count                # tokens per model, read from the answer's usage block
+          provider: openai
+        - filter: time_to_first_token
+        - filter: load_balancer
+          clusters:
+            - name: gemma                    # (4) cluster gemma = the KServe workload of the model
+              endpoints:
+                - "gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local:8000"
+              tls:
+                sni: gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local
+                ca: {ca_path: /etc/service-ca/service-ca.crt}   # OpenShift service CA
+            # - name: qwen ... (same shape, qwen3-0-6b-kserve-workload-svc)
+  ```
+  The request is forwarded unchanged (same path `/v1/chat/completions`, same body), so vLLM in the
+  Gemma pod receives `"model": "gemma-3-270m-it"`, which is the name it serves, and answers. That's why
+  the client must use the exact served name here; the aliases of Part F (`fast` → Gemma) also
+  rewrite the name in the body (`model_to_provider`, `target_model`).
+  See it happen: `oc logs deploy/praxis-ai -n ai-gateways | grep 'access method' | tail -3` shows
+  `cluster="gemma" upstream="gemma-3-270m-it-kserve-workload-svc...:8000"` per request.
 * **You see:** both models answer on the **same** URL; an unknown model is a 404 from Praxis itself.
 * **Say:** "Every OpenAI client points at one base URL. Praxis reads `model` from the JSON body,
   copies it into an `X-Model` header (`model_to_header`) and routes on that. Gateway API can't do
