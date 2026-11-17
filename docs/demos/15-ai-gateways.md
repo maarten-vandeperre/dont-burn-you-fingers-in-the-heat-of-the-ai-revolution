@@ -123,6 +123,35 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
   chat $P gemma-3-270m-it | jq -r '.model, .choices[0].message.content'
   chat $P gpt-4o -o /dev/null -w '%{http_code}\n'              # 404: unknown model
   ```
+* **What `chat` does:** it is a shell shortcut for one OpenAI Chat Completions call:
+  `chat <base-url> <model> [extra curl options]`. It sends
+  ```
+  POST <base-url>/v1/chat/completions
+  content-type: application/json
+
+  {"model": "<model>", "max_tokens": 30, "messages": [{"role": "user", "content": "Say hi"}]}
+  ```
+  `-sk` keeps curl quiet and accepts the lab cluster's self-signed certificate, `"${@:3}"` passes
+  any further arguments straight to curl (the third line uses that for `-o /dev/null -w
+  '%{http_code}'`: print only the HTTP status), and `echo` adds the missing newline. `jq` then
+  prints the `model` that answered and the answer text. Note what is **not** in the request: no
+  model in the URL, no header that names the model. The only place the model is named is the body.
+* **What happens in Praxis** (listener `direct`, `:8080`, route `praxis-ai`; chains in
+  [`praxis-ai.yaml`](../../stack/ai-gateways/praxis/praxis-ai.yaml)):
+  1. `observability`: a request id and an access-log line.
+  2. `classify`: `ai_operation` recognises an OpenAI chat request from method + path;
+     `openai_chat_completions_request` parses the JSON body; `model_to_header` copies
+     `"model": "qwen3-0-6b"` into a request header `X-Model: qwen3-0-6b` (replacing any `X-Model`
+     the client sent).
+  3. `translate`: does nothing here (only for Anthropic `/v1/messages`, A2).
+  4. `models`: the `router` matches path `/v1/` **and** header `x-model: qwen3-0-6b` → cluster
+     `qwen`; `load_balancer` opens TLS to
+     `qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local:8000`, verified with the
+     OpenShift service CA, and forwards the request unchanged. On the way back `token_count` and
+     `time_to_first_token` record `praxis_ai_*_tokens_total{model="qwen3-0-6b"}` and the TTFT (A3).
+  5. Same URL, `"model": "gemma-3-270m-it"` → `X-Model: gemma-3-270m-it` → cluster `gemma`.
+     `"model": "gpt-4o"` → no route matches that header → Praxis answers **404** itself; no model
+     server is contacted.
 * **You see:** both models answer on the **same** URL; an unknown model is a 404 from Praxis itself.
 * **Say:** "Every OpenAI client points at one base URL. Praxis reads `model` from the JSON body,
   copies it into an `X-Model` header (`model_to_header`) and routes on that. Gateway API can't do
