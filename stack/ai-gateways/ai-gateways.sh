@@ -13,6 +13,9 @@
 #                                              mcp-gateway: Gateway, two demo MCP servers, policies
 #   ./deploy.sh ai-gateways mcp-test           Part G from the terminal: tools/list, per-tool authz,
 #                                              per-tool rate limit, as alice and bob
+#   ./deploy.sh ai-gateways platform [h1|h2|h3|h4|all|reset]
+#                                              Part H, platform engineering: Gateway defaults vs
+#                                              route policies (atomic, merge, overrides)
 #   ./deploy.sh ai-gateways key <user> <free|gold>
 #                                              Connectivity Link: create (or re-tier) an API key
 #   ./deploy.sh ai-gateways maas-key           OpenShift AI MaaS: mint a 1h API key (subscription
@@ -505,6 +508,91 @@ mcp_test() {
   rm -f "$sa" "$sb"
 }
 
+# ----------------------------------------------------------------------------- platform (Part H)
+# Gateway-level policies (platform team) vs route-level policies (app team): atomic replace,
+# merge, override. Uses its own route /team-a/v1/ (-> Gemma); Parts B and F are not touched,
+# except that h3/h4 switch the Gateway policies llm-api-auth / llm-api-throttle to their
+# `defaults: merge` / `overrides` variants until `platform reset`.
+PE_DIR="${GW_DIR}/connectivity-link/platform-engineering"
+pe_code() {  # pe_code [key] -> HTTP status of GET /team-a/v1/models (cheap: vLLM's model list)
+  local h=(); [[ -n "${1:-}" ]] && h=(-H "Authorization: APIKEY $1")
+  "${CURL[@]}" -o /dev/null -w '%{http_code}' "https://$(route_host llm-gateway)/team-a/v1/models" ${h[@]+"${h[@]}"} || echo 000
+}
+pe_probe() {
+  local a b; a=$(key_of alice); b=$(key_of bob)
+  info "GET /team-a/v1/models   no key: $(pe_code)   alice (free): $(pe_code "$a")   bob (gold): $(pe_code "$b")"
+  sleep 1.2   # a fresh second for the throttle
+  local i; for i in $(seq 1 10); do pe_code "$b" & done > /tmp/aigw-pe.txt; wait
+  info "bob, 10 in parallel:    $(fold -w3 /tmp/aigw-pe.txt | sort | uniq -c | awk '{printf "%s x %s   ", $1, $2}')"
+}
+pe_is() { [[ "$(pe_code "${1:-}")" == "$2" ]]; }          # pe_is <key-or-empty> <code>
+pe_cond() { [[ "$(oc get "$1" -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Enforced")].status}' 2>/dev/null)" == "$2" ]]; }
+pe_until() {  # pe_until <label> <key-or-empty> <wanted-code>: wait for Kuadrant to push the change
+  wait_until 90 "$1" pe_is "$2" "$3" || true
+}
+pe_enforced() {  # pe_enforced <kind/name> <True|False>
+  wait_until 90 "$1 Enforced=$2" pe_cond "$1" "$2" || true
+  sleep 5    # Limitador / wasm config reaches every Envoy a moment after the status
+}
+pe_status() {
+  local p; for p in "$@"; do
+    info "${p}: $(oc get "$p" -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Enforced")].status} {.status.conditions[?(@.type=="Enforced")].message}' 2>/dev/null || echo 'not present')"
+  done
+}
+pe_h1() {
+  step "H1. A team adds a route, no policies: it inherits the platform's Gateway policies"
+  oc apply -f "${PE_DIR}/team-route.yaml" >/dev/null
+  pe_until "route llm-team-a" "$(key_of bob)" 200
+  pe_probe
+  info "(401 without a key, 200 with one, 5 x 200 + 5 x 429: llm-api-auth + llm-api-throttle on the Gateway)"
+}
+pe_h2() {
+  step "H2. The team adds an AuthPolicy with only a 'gold only' rule (Gateway policy = implicit default, atomic)"
+  oc apply -f "${PE_DIR}/team-auth.yaml" >/dev/null
+  pe_until "team-a-auth replaces llm-api-auth" "$(key_of bob)" 403
+  pe_probe
+  pe_status authpolicy/team-a-auth authpolicy/llm-api-auth
+  info "(everyone 403, bob too: the route policy REPLACED the gateway policy, the API-key check is gone,"
+  info " so there's no identity and no tier to check)"
+}
+pe_h3() {
+  step "H3. The platform makes its AuthPolicy 'defaults' with 'strategy: merge'"
+  oc apply -f "${PE_DIR}/gateway-auth-merge.yaml" >/dev/null
+  pe_until "merged auth: no key" "" 401
+  pe_until "merged auth: bob" "$(key_of bob)" 200
+  pe_probe
+  info "(401 / 403 / 200: the platform's key check and identity + the team's gold-only rule, merged)"
+}
+pe_h4() {
+  step "H4a. The team loosens the throttle for its route: RateLimitPolicy 100/s"
+  oc apply -f "${PE_DIR}/team-throttle.yaml" >/dev/null
+  pe_enforced ratelimitpolicy/team-a-throttle True
+  pe_probe
+  pe_status ratelimitpolicy/team-a-throttle ratelimitpolicy/llm-api-throttle
+  info "(10 x 200: on this route the team's 100/s replaced the platform's 5/s default)"
+  step "H4b. The platform makes its throttle an override"
+  oc apply -f "${PE_DIR}/gateway-throttle-override.yaml" >/dev/null
+  pe_enforced ratelimitpolicy/team-a-throttle False
+  pe_probe
+  pe_status ratelimitpolicy/team-a-throttle ratelimitpolicy/llm-api-throttle
+  info "(5 x 200 + 5 x 429 again: the team's 100/s is overridden by the platform's 5/s)"
+}
+pe_reset() {
+  step "Part H reset: remove team-a, restore the Gateway policies of api-policies.yaml"
+  oc delete -f "${PE_DIR}/team-throttle.yaml" -f "${PE_DIR}/team-auth.yaml" -f "${PE_DIR}/team-route.yaml" --ignore-not-found >/dev/null
+  oc apply -f "${GW_DIR}/connectivity-link/api-policies.yaml" >/dev/null
+  pe_enforced ratelimitpolicy/llm-api-throttle True
+  pe_status authpolicy/llm-api-auth ratelimitpolicy/llm-api-throttle
+}
+platform() {
+  case "${1:-all}" in
+    h1) pe_h1 ;; h2) pe_h2 ;; h3) pe_h3 ;; h4) pe_h4 ;;
+    all) pe_h1; pe_h2; pe_h3; pe_h4; info "Back to the original: ./deploy.sh ai-gateways platform reset" ;;
+    reset) pe_reset ;;
+    *) die "usage: platform [h1|h2|h3|h4|all|reset]" ;;
+  esac
+}
+
 # ----------------------------------------------------------------------------- metrics
 metrics() {
   step "Praxis AI: per-model tokens and time to first token (from the gateway itself)"
@@ -564,7 +652,7 @@ destroy() {
   info "MaaS, Connectivity Link and the models are untouched"
 }
 
-usage() { sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 cmd=${1:-}; [[ $# -gt 0 ]] && shift
 case "$cmd" in
@@ -575,6 +663,7 @@ case "$cmd" in
   api)      api ;;
   mcp)      mcp ;;
   mcp-test) mcp_test ;;
+  platform) platform "$@" ;;
   maas-key) maas_key ;;
   compare)  compare "$@" ;;
   test)     test_all ;;

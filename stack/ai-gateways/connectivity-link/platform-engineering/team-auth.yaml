@@ -1,0 +1,23 @@
+# Part H, persona: app team. "Our API is for gold consumers only." The team writes just that one
+# rule. Whether the route still checks API keys depends on how the platform's Gateway policy
+# llm-api-auth is written:
+#   bare rules / implicit defaults (atomic): this policy REPLACES the gateway policy for the route
+#   defaults + strategy: merge:              this rule is ADDED to the gateway's rules
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: team-a-auth
+  namespace: ai-gateways
+  labels:
+    app.kubernetes.io/part-of: ai-gateways-demo
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: llm-team-a
+  rules:
+    authorization:
+      gold-only:
+        patternMatching:
+          patterns:
+            - predicate: auth.identity.metadata.annotations["llm-gateway/tier"] == "gold"

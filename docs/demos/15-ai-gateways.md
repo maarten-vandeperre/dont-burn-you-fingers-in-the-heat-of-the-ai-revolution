@@ -33,8 +33,9 @@ this repository, see the Camel model router (`auto` alias) in
 [demo 1](01-models-and-rag.md).
 
 **Duration:** 25 minutes for Parts A to E (5 Part A, 6 Part B, 5 Part C, 4 Part D, 5 Part E), plus
-20 minutes for Part F (Connectivity Link + Praxis, with the AI Gateway Console) and 10 minutes for
-Part G (an MCP gateway through Connectivity Link). Each part also
+20 minutes for Part F (Connectivity Link + Praxis, with the AI Gateway Console), 10 minutes for
+Part G (an MCP gateway through Connectivity Link) and 8 minutes for Part H (platform engineering:
+gateway-wide defaults vs team policies, merge and overrides). Each part also
 works on its own; Part F is the one to pick for a "what does an AI gateway do for me" audience.
 
 ```
@@ -544,20 +545,33 @@ gateway plus policies. B1 shows the bare plumbing and proves that the policies a
   curl -sk -o /dev/null -w '%{http_code}\n' $G/gemma-3-270m-it/v1/chat/completions -d '{}'      # 401
   ```
   In the OpenShift console:
-  * **Connectivity Link** section in the left menu (Overview, Policies, Policy Topology). It comes
-    from the `kuadrant-console-plugin` that Connectivity Link installs, but the plugin is **off**
-    until it's enabled in the console config (one-time, cluster-admin):
+  * **Connectivity Link** section in the left menu (Overview, Policies, API Products, Policy
+    Topology). It comes from the `kuadrant-console-plugin` that Connectivity Link installs, but
+    the plugin is **off** until it's enabled in the console config (one-time, cluster-admin):
     ```bash
     oc patch console.operator cluster --type json \
       -p '[{"op":"add","path":"/spec/plugins/-","value":"kuadrant-console-plugin"}]'
     ```
-    Reload the browser after ~1 min. **Policy Topology** is the best picture for this part: it
-    draws Gateway → HTTPRoute → Services, with the AuthPolicy and TokenRateLimitPolicy attached.
-  * Without the plugin, plain OpenShift 4.22 has no Gateways page under **Networking** (only
-    Services, Routes, Ingresses, NetworkPolicies…). Use **Home > Search** (or **Home > API
-    Explorer**), project `ai-gateways`, resource **Gateway** / **HTTPRoute** / **AuthPolicy** /
-    **TokenRateLimitPolicy**, and project `maas-models` for **ReferenceGrant**. Each one opens
-    with its YAML and status.
+    Reload the browser after ~1 min. What to open, in this order:
+    1. **Connectivity Link > Policy Topology**: the best picture for this part. It draws
+       GatewayClass → Gateway `llm-gateway` → HTTPRoute `llm-models` → the Services, with
+       `AuthPolicy` and `TokenRateLimitPolicy` attached where they apply. Click a node to open it.
+    2. **Connectivity Link > Overview**: the gateways and HTTPRoutes of the cluster (with their
+       status) and the policies. This is where the plugin lists gateways; it does **not** add a
+       separate "Gateways" item to the menu.
+    3. **Connectivity Link > Policies**, project `ai-gateways`: `llm-models-auth`,
+       `llm-models-tokens` (and the Part F ones), with their *Accepted/Enforced* status.
+  * **The Gateway / HTTPRoute pages themselves** (YAML, status, and with the plugin a **Policies**
+    tab): OpenShift 4.22 has no menu entry for them under **Networking** (only Services, Routes,
+    Ingresses, NetworkPolicies…), with or without the plugin. Open them via **Home > Search** →
+    project `ai-gateways` → resource **Gateway** (then **HTTPRoute**), or paste the URL directly:
+    ```text
+    https://<console>/k8s/ns/ai-gateways/gateway.networking.k8s.io~v1~Gateway
+    https://<console>/k8s/ns/ai-gateways/gateway.networking.k8s.io~v1~HTTPRoute
+    https://<console>/k8s/ns/maas-models/gateway.networking.k8s.io~v1beta1~ReferenceGrant
+    ```
+    Tip: on the Search page, **pin** the Gateway and HTTPRoute resources ("Add to navigation"),
+    and they appear in the left menu for the rest of the demo.
 
 * **The objects, in a nutshell** (what each CRD is for; who owns it):
 
@@ -930,6 +944,103 @@ AI uses) as a plain Deployment with one configuration, `confidential`, and no LL
   ```
   and the same personal-data prompt on the unguarded listener (`$P`): the model gets, and repeats,
   the real IBAN.
+* **Configured by:** two files: the Praxis filter that calls NeMo, and NeMo's own
+  `config.yaml`.
+
+  **Praxis side**, chain `guard` in [`praxis-ai.yaml`](../../stack/ai-gateways/praxis/praxis-ai.yaml):
+  ```yaml
+  - name: guard
+    filters:
+      - filter: ai_guardrails
+        provider:
+          type: nemo
+          endpoint: "http://nemo-guardrails.ai-gateways.svc.cluster.local:8000/v1/checks"
+          guardrails:
+            config_ids: ["confidential"]   # -> NeMo loads /app/config/confidential/config.yaml
+        phase:
+          request: true                    # check the prompt  -> NeMo's *input* rails
+          response: true                   # check the answer  -> NeMo's *output* rails
+  ```
+  `confidential` is just a directory name. NeMo serves every subdirectory of `/app/config` as a
+  configuration, and the Deployment mounts ConfigMap `nemo-config-confidential` (generated from
+  [`config/confidential/config.yaml`](../../stack/ai-gateways/guardrails/config/confidential/config.yaml)
+  by the kustomization) at `/app/config/confidential`. `CONFIG_ID=confidential` makes it the
+  default.
+
+  **NeMo side**, [`config.yaml`](../../stack/ai-gateways/guardrails/config/confidential/config.yaml).
+  It has two halves that are easy to mix up:
+  ```yaml
+  models: []                       # no LLM: both rails are deterministic (regex, Presidio)
+
+  rails:
+    config:                        # (A) SETTINGS per rail type: what to look for
+      regex_detection:             #     read by the regex rail
+        input:  {case_insensitive: true, patterns: &secrets [...]}   # used when checking prompts
+        output: {case_insensitive: true, patterns: *secrets}         # used when checking answers
+      sensitive_data_detection:    #     read by the Presidio rail
+        input:  {entities: [EMAIL_ADDRESS, PHONE_NUMBER, CREDIT_CARD, IBAN_CODE]}
+        output: {entities: [...]}
+
+    input:                         # (B) WHICH rails run on the prompt, in this order
+      flows:
+        - regex check input              # block secrets
+        - mask sensitive data on input   # mask personal data
+    output:                        #     WHICH rails run on the answer
+      flows:
+        - regex check output             # block secrets
+  ```
+  **(A) says *what* to look for, (B) says *which checks run*.** A setting under (A) does nothing
+  unless a flow under (B) uses it.
+
+  **Where the flow names come from.** You won't find `regex check input` or `mask sensitive data
+  on input` defined anywhere in this repo, and there's no `rails.co` file: they are **built-in
+  flows** of NeMo's guardrails library, written in Colang and shipped inside the image. A flow name
+  in `rails.input.flows` / `rails.output.flows` must match one of them exactly, words and spaces
+  included. In the running pod (`oc exec deploy/nemo-guardrails -n ai-gateways -- cat …`):
+  ```text
+  # /app/nemoguardrails/library/regex/flows.co
+  flow regex check input
+    $response = await DetectRegexPatternAction(source="input", text=$user_message)
+    if $response.is_blocked
+      bot refuse to respond
+      abort
+
+  # /app/nemoguardrails/library/sensitive_data_detection/flows.co
+  flow mask sensitive data on input
+    $response = await MaskSensitiveDataAction(source="input", text=$user_message)
+    if $response.is_transform
+      $user_message = $response.transform_text["user_message"]
+  ```
+  The naming convention is `<what it does> <rail> <where>`. Each library flow calls one Python
+  action with `source="input"` or `"output"`, and the action reads
+  `rails.config.<rail type>.<source>`. That's how (B) links to (A):
+
+  | Flow name in (B) | Library file | Action | Reads settings from (A) | Result → what Praxis does |
+  |---|---|---|---|---|
+  | `regex check input` | `library/regex/flows.co` | `detect_regex_pattern(source="input")` | `regex_detection.input.patterns` | match → `abort` → `/v1/checks` says *blocked* → **403** |
+  | `regex check output` | same | `source="output"` | `regex_detection.output.patterns` | match → *blocked* → answer replaced with `Response blocked by guardrails: …` |
+  | `mask sensitive data on input` | `library/sensitive_data_detection/flows.co` | `mask_sensitive_data(source="input")` | `sensitive_data_detection.input.entities` | hit → `$user_message` rewritten → *modified* → Praxis forwards the masked prompt |
+  | `detect sensitive data on input` (not used) | same | `detect_sensitive_data` | same `input.entities` | hit → *blocked* (block instead of mask) |
+  | `mask` / `detect sensitive data on output` (not used) | same | `source="output"` | `sensitive_data_detection.output.entities` | mask / block personal data in the **answer** |
+
+  Two things follow from this:
+  * The `sensitive_data_detection.output` entities in our file are **not used**: no output flow
+    reads them. To mask personal data in model answers too, add `- mask sensitive data on output`
+    under `rails.output.flows`.
+  * Switching from masking to blocking personal data is a one-word change in (B):
+    `mask sensitive data on input` → `detect sensitive data on input`. Nothing changes in (A).
+
+  The other ready-made rails are in the same library: `self check input` (an LLM judges the
+  prompt; needs a `models:` entry), `content safety check input $model` (a safety model such as
+  NemoGuard), `llama guard check input`, `injection detection`, `topic safety check input $model`,
+  and more: `oc exec deploy/nemo-guardrails -n ai-gateways -- ls /app/nemoguardrails/library`.
+  Custom rails are your own `.co` files (and `actions.py`) next to `config.yaml` in the same
+  directory. The [coffee-guardrails](../../app/coffee-guardrails/) app does that: see
+  `guardrails/config/coffee/rails.co` next to its `config.yaml`.
+
+  Changing the file: edit it, then `oc apply -k stack/ai-gateways/guardrails` and
+  `oc rollout restart deploy/nemo-guardrails -n ai-gateways`. The NeMo server loads a
+  configuration once and caches it (auto-reload is off), so unlike Praxis it doesn't hot-reload.
 * **Say:** "The model only ever saw `<EMAIL_ADDRESS>` and `<IBAN_CODE>`; the real values stopped
   at the gateway. A prompt with a project code name never reached the model at all. And because it
   runs on the response too, a model that leaks a secret, say from a RAG document, gets its answer
@@ -1395,7 +1506,9 @@ two headers the Connectivity Link `AuthPolicy` writes on every request (`x-consu
 `llm-gateway-telemetry` target the Gateway, so they are the defaults for every route on it. A route
 with its own policy of the same kind replaces the default for that route: `llm-models` (Part B)
 keeps its own `AuthPolicy` and `TokenRateLimitPolicy`, and inherits only the throttle and the
-telemetry. Platform defaults with per-API overrides, no copy-paste.
+telemetry. Platform defaults with per-API overrides, no copy-paste. "Replaces" is meant
+literally: the route policy wins as a whole, not rule by rule. Part H shows that, and the two
+alternatives (`strategy: merge`, `overrides`).
 
 ---
 
@@ -1647,6 +1760,160 @@ consumer keys, the same Authorino and Limitador, and the same Prometheus.
 
 ---
 
+## Part H: platform engineering, gateway defaults and team overrides (8 minutes)
+
+**The story:** one shared `llm-gateway`, two kinds of owners. The **platform team** owns the
+Gateway and puts policies on it: API keys, 5 requests/s per consumer, token limits, telemetry
+(Part F, [`api-policies.yaml`](../../stack/ai-gateways/connectivity-link/api-policies.yaml)). **App
+teams** own HTTPRoutes and may attach their own policies. What happens when both write a policy
+of the same kind? Connectivity Link has three answers, and you choose them in the YAML:
+
+| How the Gateway policy is written | Name | A route policy of the same kind… |
+|---|---|---|
+| bare `rules:` / `limits:` (all policies in Parts B, F, G) | implicit **defaults**, strategy **atomic** | **replaces** the gateway policy for that route, completely |
+| `defaults: {strategy: merge, rules: …}` | defaults, **merge** | **is merged** with it: rules with the same name are the route's, all other gateway rules stay |
+| `overrides: {…}` | **overrides** | **is ignored** for what the override sets: the gateway wins, no team can loosen it |
+
+Already in this demo, without saying so: `llm-models` (Part B) has its own `AuthPolicy` and
+`TokenRateLimitPolicy`, which *replace* the Gateway's (that's why alice has 300 tokens/min there
+and 500 on `/v1` + `/v2`, and why `llm-api-auth` says "partially enforced"). Same for `mcp-ops` in
+Part G, which repeats the whole authentication block for that reason.
+
+Part H makes it visible with a new team route. It doesn't touch the Part B/F routes; h3/h4
+switch the two Gateway policies to their `merge` / `overrides` variants until `platform reset`.
+Each step is one `./deploy.sh ai-gateways platform hN`, or `platform all` for the whole run
+(about 75 s, mostly waiting for Kuadrant to push the changes). Every probe is
+`GET /team-a/v1/models` (vLLM's model list: cheap, no tokens) without a key, as alice (free) and
+as bob (gold), plus 10 parallel calls as bob.
+
+Files: [`connectivity-link/platform-engineering/`](../../stack/ai-gateways/connectivity-link/platform-engineering/).
+They are **not** part of the kustomization, so `deploy` never applies them.
+
+**H1. A team adds a route, nothing else.**
+* **Do:** `./deploy.sh ai-gateways platform h1`
+* **What happens:** [`team-route.yaml`](../../stack/ai-gateways/connectivity-link/platform-engineering/team-route.yaml)
+  is an HTTPRoute `llm-team-a` on `llm-gateway`: `/team-a/v1/…` → Gemma (`URLRewrite` to
+  `/v1/…`). The existing ReferenceGrant in `maas-models` already admits every HTTPRoute from
+  `ai-gateways`. The route has no policies, so Kuadrant applies all four Gateway policies to it.
+* **You see:**
+  ```
+  GET /team-a/v1/models   no key: 401   alice (free): 200   bob (gold): 200
+  bob, 10 in parallel:    5 x 200   5 x 429
+  ```
+* **Say:** "The team wrote a route and nothing else, and it's already protected: API keys, the
+  throttle, token limits, metrics. That's the platform's default, and it costs the team nothing."
+
+**H2. The team adds a policy. The trap: atomic replacement.**
+* **Do:** `./deploy.sh ai-gateways platform h2`
+* **What happens:** the team wants "gold only" and writes just that rule:
+  ```yaml
+  # team-auth.yaml
+  kind: AuthPolicy
+  metadata: {name: team-a-auth, namespace: ai-gateways}
+  spec:
+    targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: llm-team-a}
+    rules:
+      authorization:
+        gold-only:
+          patternMatching:
+            patterns:
+              - predicate: auth.identity.metadata.annotations["llm-gateway/tier"] == "gold"
+  ```
+  The Gateway's `llm-api-auth` is an implicit default with the atomic strategy, so `team-a-auth`
+  **replaces** it on this route: the API-key `authentication`, the `x-consumer` headers and the
+  `identity` for the limits are all gone. Nobody is identified anymore, so
+  `auth.identity.metadata.annotations` is empty and the rule is false for everybody.
+* **You see:**
+  ```
+  GET /team-a/v1/models   no key: 403   alice (free): 403   bob (gold): 403
+  authpolicy/team-a-auth: True  AuthPolicy has been successfully enforced
+  authpolicy/llm-api-auth: True AuthPolicy has been partially enforced
+  ```
+  Everybody gets 403, bob included. Here it fails closed. With a rule that doesn't need the
+  identity (say, on a path), the route would be **open without a key**.
+* **Say:** "The team added one rule and lost all of the platform's. With the default strategy, a
+  route policy replaces the gateway policy as a whole. That's why `llm-models-auth` (Part B) and
+  `mcp-ops-tools` (Part G) repeat the whole authentication block."
+
+**H3. The platform switches to merge.**
+* **Do:** `./deploy.sh ai-gateways platform h3`
+* **What happens:** [`gateway-auth-merge.yaml`](../../stack/ai-gateways/connectivity-link/platform-engineering/gateway-auth-merge.yaml)
+  is the same `llm-api-auth`, with its rules one level down:
+  ```yaml
+  spec:
+    targetRef: {group: gateway.networking.k8s.io, kind: Gateway, name: llm-gateway}
+    defaults:
+      strategy: merge          # <- the change (bare rules = defaults + atomic)
+      rules:
+        authentication:
+          api-key-consumers: {...}      # unchanged
+        response:
+          success: {headers: {...}, filters: {identity: {...}}}   # unchanged
+  ```
+  Kuadrant now merges per rule name. The route's `gold-only` is new, so it's added; the gateway's
+  `api-key-consumers` and `identity` are kept. Rules with the same name would be the route's (it
+  is the more specific one). The team's `team-auth.yaml` didn't change.
+* **You see:**
+  ```
+  GET /team-a/v1/models   no key: 401   alice (free): 403   bob (gold): 200
+  bob, 10 in parallel:    5 x 200   5 x 429
+  ```
+  401 = the platform's key check, 403 = the team's rule, and the throttle works again because
+  `auth.identity.userid` is back.
+* **Say:** "Same team policy, one line changed on the platform side. Now teams *add* rules to the
+  platform's instead of replacing them."
+
+**H4. The platform sets a ceiling: overrides.**
+* **Do:** `./deploy.sh ai-gateways platform h4` (two steps)
+* **What happens:**
+  1. The team finds 5/s too slow and applies
+     [`team-throttle.yaml`](../../stack/ai-gateways/connectivity-link/platform-engineering/team-throttle.yaml),
+     a `RateLimitPolicy` on its route with 100 requests/s per consumer. `llm-api-throttle` is a
+     default, so the team's limit replaces it on `llm-team-a` → 10 × 200.
+  2. The platform applies
+     [`gateway-throttle-override.yaml`](../../stack/ai-gateways/connectivity-link/platform-engineering/gateway-throttle-override.yaml):
+     the same 5/s, under `overrides:` instead of bare `limits:`.
+     ```yaml
+     spec:
+       targetRef: {group: gateway.networking.k8s.io, kind: Gateway, name: llm-gateway}
+       overrides:               # <- the change
+         limits:
+           per-consumer:
+             rates: [{limit: 5, window: 1s}]
+             counters: [{expression: auth.identity.userid}]
+     ```
+     Now the gateway policy wins over every RateLimitPolicy on its routes.
+* **You see:**
+  ```
+  H4a  bob, 10 in parallel:  10 x 200
+       ratelimitpolicy/team-a-throttle: True   successfully enforced
+       ratelimitpolicy/llm-api-throttle: True  partially enforced
+  H4b  bob, 10 in parallel:  5 x 200   5 x 429
+       ratelimitpolicy/team-a-throttle: False  RateLimitPolicy is overridden by [ai-gateways/llm-api-throttle]
+       ratelimitpolicy/llm-api-throttle: True  successfully enforced
+  ```
+* **Say:** "Defaults are suggestions teams can change; overrides are guardrails they can't. The
+  team's policy is still there and reports *why* it doesn't apply, in its status. So does Policy
+  Topology in the console."
+
+**Reset:** `./deploy.sh ai-gateways platform reset` deletes the team route and its two policies
+and re-applies `api-policies.yaml` (bare rules again). Check with `./deploy.sh ai-gateways test`.
+
+**Which one when:**
+* **defaults, atomic** (the default): a team owns its route's policy completely. Simple, but each
+  route policy must be complete; forgetting the authentication block makes the route fail closed
+  (H2), or open if its rules don't use the identity.
+* **defaults, merge**: the platform provides a base (authentication, identity, headers) and teams
+  add their own rules. Usually what you want for authentication.
+* **overrides**: non-negotiable rules: a ceiling on request rates, mandatory authentication, a
+  deny rule for a path. One more option: `overrides` with `strategy: merge`, so the platform only
+  pins the rules it names.
+* Same mechanism for `AuthPolicy`, `RateLimitPolicy` and `TokenRateLimitPolicy`. On the Console
+  side, **Connectivity Link > Policy Topology** shows which policy affects which route, and the
+  status of each policy says whether it's enforced, partially enforced, or overridden and by whom.
+
+---
+
 **When to use which**
 
 | You need | Use |
@@ -1658,6 +1925,7 @@ consumer keys, the same Authorino and Limitador, and the same Prometheus.
 | The prompt decides which model answers (context-based routing) | none of the three out of the box: the Camel model router ([demo 1](01-models-and-rag.md)) |
 | One LLM API for internal teams: keys, quotas, versions, metrics per consumer, **and** aliases, OpenAI egress with guardrails, data that must stay local | **Connectivity Link in front of Praxis** (Part F) |
 | One MCP endpoint for agents, with authentication, per-tool permissions, limits and metrics | **Connectivity Link MCP Gateway** (Part G, preview) |
+| Platform-wide rules on a shared gateway that teams can extend, or can't loosen | Connectivity Link policies on the **Gateway** with `defaults` + `strategy: merge`, or `overrides` (Part H) |
 
 ---
 
@@ -2181,6 +2449,7 @@ Open these files (**Shift twice**, type the name):
 | `praxis-ai.yaml`, end of file | Part F: `model_to_provider` table, `tier-gate`, `data-classification`, the `openai-egress` listener with `guardrails` and `credential_injection` |
 | `mcp-gateway/gateway.yaml`, `servers/registrations.yaml` | Part G: the two listeners, `MCPGatewayExtension`, an MCP server = HTTPRoute + `MCPServerRegistration` with a prefix |
 | `mcp-gateway/policies.yaml` | Part G: the `x-mcp-toolname` / `x-mcp-method` headers in a CEL rule, a rate-limit `when`, a TelemetryPolicy label |
+| `connectivity-link/platform-engineering/` | Part H: a team route and its policies; the Gateway policies as `defaults: {strategy: merge}` and as `overrides` |
 | `console/server/index.mjs` | what each console button does (`chat`, `burst`, `setThrottle`, `setTokens`, the PromQL) |
 | `ai-gateways.sh` | `key` (a consumer is just a labelled Secret), `compare`, `burst`, `guard`, `api`, `openai-key`, `console` |
 
@@ -2201,6 +2470,8 @@ Open these files (**Shift twice**, type the name):
 ./deploy.sh ai-gateways console     # rebuild + redeploy the AI Gateway Console after a change in stack/ai-gateways/console
 ./deploy.sh ai-gateways mcp         # Part G: MCP Gateway operator + namespace mcp-gateway (servers, policies)
 ./deploy.sh ai-gateways mcp-test    # Part G: 401 without key, tools/list, set_throttle 403/200, ask_model 3x200 + 429
+./deploy.sh ai-gateways platform    # Part H: inherit 401/200; atomic 403 for all; merge 401/403/200; override 5x200+5x429
+./deploy.sh ai-gateways platform reset
 ```
 
 The console can also run on your laptop against the cluster, e.g. while changing it:
@@ -2264,6 +2535,17 @@ Part F (Connectivity Link + Praxis, console):
   third consumer key needs a line there (and `CONSUMERS` in the Deployment).
 * **Console metrics tables stay empty:** wait for a scrape (Praxis every 15 s, Limitador 30 s), and
   check the ClusterRoleBinding `ai-gateway-console-monitoring-view` (Thanos querier access).
+
+Part H (platform engineering):
+
+* **A step shows the previous step's result:** Kuadrant needs 5–20 s to push a policy change to
+  Authorino, Limitador and the Envoy. `platform` waits for the expected status code or policy
+  status (up to 90 s, then a `WARN`); by hand, wait a few seconds and repeat the probe.
+* **Part B or F behave differently after Part H:** run `./deploy.sh ai-gateways platform reset`.
+  h3/h4 leave `llm-api-auth` in `merge` and `llm-api-throttle` in `overrides` mode. Note that the
+  override also applies to `llm-models` (Part B), which has no RateLimitPolicy of its own anyway.
+* **`team-a-throttle` stays `Enforced=False` after the reset:** it's deleted by the reset;
+  `oc get ratelimitpolicy -n ai-gateways` should list only `llm-api-throttle`.
 
 Part G (MCP gateway):
 

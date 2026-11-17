@@ -1,0 +1,23 @@
+# Part H, persona: platform engineer. The same Gateway RateLimitPolicy as api-policies.yaml
+# (llm-api-throttle, 5 requests/s per consumer), now under `overrides`: it wins over any
+# RateLimitPolicy on a route of this Gateway, so no team can loosen it (team-throttle.yaml
+# is then ignored). A ceiling the platform owns, not a suggestion.
+# Back to the original: oc apply -f ../api-policies.yaml
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: llm-api-throttle
+  namespace: ai-gateways
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: llm-gateway
+  overrides:                             # <- instead of bare `limits:` (= implicit defaults)
+    limits:
+      per-consumer:
+        rates:
+          - limit: 5
+            window: 1s
+        counters:
+          - expression: auth.identity.userid

@@ -1,0 +1,47 @@
+# Part H, persona: platform engineer. The same Gateway AuthPolicy as api-policies.yaml
+# (llm-api-auth), with its rules moved under `defaults` and `strategy: merge`:
+#   - still a default: a route policy may replace a rule *with the same name*;
+#   - merge instead of atomic: rules the route policy doesn't name are kept. A team that only
+#     adds an authorization rule (team-auth.yaml) keeps the platform's API-key check, the
+#     x-consumer headers and the identity for the rate limits.
+# Back to the original: oc apply -f ../api-policies.yaml
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: llm-api-auth
+  namespace: ai-gateways
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: llm-gateway
+  defaults:
+    strategy: merge                      # <- the only real change (plus the `defaults:` level)
+    rules:
+      authentication:
+        api-key-consumers:
+          apiKey:
+            allNamespaces: true
+            selector:
+              matchLabels:
+                llm-gateway/consumer: "true"
+          credentials:
+            authorizationHeader:
+              prefix: APIKEY
+      response:
+        success:
+          headers:
+            x-consumer:
+              plain:
+                expression: auth.identity.metadata.name
+            x-consumer-tier:
+              plain:
+                expression: auth.identity.metadata.annotations["llm-gateway/tier"]
+          filters:
+            identity:
+              json:
+                properties:
+                  userid:
+                    expression: auth.identity.metadata.name
+                  tier:
+                    expression: auth.identity.metadata.annotations["llm-gateway/tier"]

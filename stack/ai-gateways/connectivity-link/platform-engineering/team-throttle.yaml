@@ -1,0 +1,22 @@
+# Part H, persona: app team. "5 per second is too slow for us": the team loosens the platform's
+# throttle for its own route to 100 per second per consumer. Works while the platform's
+# RateLimitPolicy llm-api-throttle is a default; ignored once the platform makes it an override.
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: team-a-throttle
+  namespace: ai-gateways
+  labels:
+    app.kubernetes.io/part-of: ai-gateways-demo
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: llm-team-a
+  limits:
+    per-consumer:
+      rates:
+        - limit: 100
+          window: 1s
+      counters:
+        - expression: auth.identity.userid

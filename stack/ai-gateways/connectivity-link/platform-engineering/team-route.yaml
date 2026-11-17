@@ -1,0 +1,28 @@
+# Part H, persona: app team "team-a". A new route on the shared llm-gateway, nothing else:
+#   /team-a/v1/...  ->  gemma-3-270m-it-kserve-workload-svc:8000  /v1/...
+# It brings no policies of its own, so it inherits every Gateway-level policy of the platform
+# team (api-policies.yaml): API key, 5 req/s throttle, token limits, telemetry.
+# The cross-namespace backendRef is allowed by the existing ReferenceGrant allow-ai-gateways-gemma
+# in maas-models (it admits every HTTPRoute from namespace ai-gateways).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: llm-team-a
+  namespace: ai-gateways
+  labels:
+    app.kubernetes.io/part-of: ai-gateways-demo
+spec:
+  parentRefs:
+    - name: llm-gateway
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /team-a/v1/}
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: {type: ReplacePrefixMatch, replacePrefixMatch: /v1/}
+      backendRefs:
+        - name: gemma-3-270m-it-kserve-workload-svc
+          namespace: maas-models
+          port: 8000
+      timeouts: {request: 0s, backendRequest: 0s}
