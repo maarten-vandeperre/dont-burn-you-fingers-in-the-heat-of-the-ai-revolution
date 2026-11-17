@@ -107,8 +107,9 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
    MAAS_KEY=$(./deploy.sh ai-gateways maas-key)
    ```
 4. Browser tabs: **OpenShift AI dashboard** (Models as a service, API keys), **OpenShift console**
-   (Observe > Metrics; Networking > Gateways / HTTPRoutes in `ai-gateways`; the Kuadrant policy
-   view), and IntelliJ on `stack/ai-gateways/`.
+   (Observe > Metrics; **Connectivity Link > Policy Topology**, which needs the
+   `kuadrant-console-plugin` enabled once, see B1; without it **Home > Search** for Gateway /
+   HTTPRoute in `ai-gateways`), and IntelliJ on `stack/ai-gateways/`.
 5. Warm the CPU models once: `./deploy.sh ai-gateways compare` (the first call can take a minute).
 
 ---
@@ -424,6 +425,89 @@ Tested on this cluster: `rate: 10, burst: 10`, reload after ~30 s, 20 parallel �
 `10 × 429`. The 429s are also counted in `praxis_rate_limit_limited_total` and, with
 `cluster="none", status_class="4xx"`, in the `praxis_http_requests_total` query of A3.
 
+**And the second half of `burst`: alice's 300 tokens/min.** That part is *not* Praxis. It calls
+Route `llm-gateway` (`$G/gemma-3-270m-it/v1/chat/completions` with alice's key), which is the
+Connectivity Link gateway of Part B, and shows what Praxis can't do: a limit **per consumer**,
+counted in **tokens**. It's defined in
+[`token-rate-limit-policy.yaml`](../../stack/ai-gateways/connectivity-link/token-rate-limit-policy.yaml):
+
+```yaml
+apiVersion: kuadrant.io/v1alpha1
+kind: TokenRateLimitPolicy
+metadata:
+  name: llm-models-tokens
+  namespace: ai-gateways
+spec:
+  targetRef:                                   # applies to the routes of HTTPRoute llm-models only
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: llm-models
+  limits:
+    free:
+      rates:
+        - limit: 300                           # <- 300 tokens (usage.total_tokens of each answer)
+          window: 1m                           # <- per minute
+      when:
+        - predicate: auth.identity.tier == "free"   # alice is free
+      counters:
+        - expression: auth.identity.userid          # one counter per consumer: alice's own
+    gold:
+      rates: [{limit: 20000, window: 1m}]      # bob
+      when: [{predicate: auth.identity.tier == "gold"}]
+      counters: [{expression: auth.identity.userid}]
+```
+
+`auth.identity.tier` and `.userid` come from the `AuthPolicy` on the same route
+([`auth-policy.yaml`](../../stack/ai-gateways/connectivity-link/auth-policy.yaml)), which reads
+them from alice's API-key Secret:
+
+```yaml
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: llm-models-auth
+  namespace: ai-gateways
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: llm-models}
+  rules:
+    authentication:
+      api-key:
+        apiKey:
+          selector:
+            matchLabels:
+              llm-gateway/consumer: "true"     # every Secret with this label is a valid key
+        credentials:
+          authorizationHeader: {prefix: APIKEY}
+    response:
+      success:
+        filters:
+          identity:
+            json:
+              properties:
+                userid: {expression: auth.identity.metadata.name}        # llm-key-alice
+                tier:   {expression: 'auth.identity.metadata.annotations["llm-gateway/tier"]'}  # free
+```
+
+```yaml
+# alice's key, created by ./deploy.sh ai-gateways key alice free
+apiVersion: v1
+kind: Secret
+metadata:
+  name: llm-key-alice
+  namespace: ai-gateways
+  labels:
+    llm-gateway/consumer: "true"
+    authorino.kuadrant.io/managed-by: authorino
+  annotations:
+    llm-gateway/tier: free                     # <- picks the "free" limit above
+stringData:
+  api_key: <random>
+```
+
+So: key → Secret `llm-key-alice` → annotation `free` → limit `free` → 300 tokens per minute on
+alice's counter. How it's counted (before/after the call) and how to change it (patch the policy,
+or move alice to gold) is in **B3**.
+
 **A5. Hot reload.** (optional)
 * **Do:** `oc edit configmap praxis-ai-config -n ai-gateways`, change `rate: 5` to `rate: 50`, then
   `oc logs deploy/praxis-ai -n ai-gateways | grep 'reload complete'` and repeat the burst.
@@ -442,11 +526,55 @@ Tested on this cluster: `rate: 10, burst: 10`, reload after ~30 s, 20 parallel �
 ## Part B: Connectivity Link, policies on Gateway API (6 minutes)
 
 **B1. The same models behind a plain Gateway.**
-* **Do:** OpenShift console > **Networking > Gateways** (`llm-gateway`) and **HTTPRoutes**
-  (`llm-models`) in project `ai-gateways`; then
+
+*What we're doing:* in Part A, Praxis was a proxy we deployed ourselves, with its own config file.
+Part B uses the opposite approach. We use **Kubernetes' standard API for traffic (Gateway API)**,
+which OpenShift already implements, to put the same two models (Qwen and Gemma, running in
+`maas-models`) behind one URL. Then (B2, B3) we attach **Connectivity Link policies** to that
+route for API keys and token quotas. Nothing is deployed that knows about LLMs: it's an ordinary
+gateway plus policies. B1 shows the bare plumbing and proves that the policies already guard it.
+
+* **Do:** show the objects, then call without a key:
   ```bash
+  oc get gateway,httproute -n ai-gateways
+  oc get referencegrant -n maas-models
+  oc get authpolicy,tokenratelimitpolicy -n ai-gateways
   curl -sk -o /dev/null -w '%{http_code}\n' $G/gemma-3-270m-it/v1/chat/completions -d '{}'      # 401
   ```
+  In the OpenShift console:
+  * **Connectivity Link** section in the left menu (Overview, Policies, Policy Topology). It comes
+    from the `kuadrant-console-plugin` that Connectivity Link installs, but the plugin is **off**
+    until it's enabled in the console config (one-time, cluster-admin):
+    ```bash
+    oc patch console.operator cluster --type json \
+      -p '[{"op":"add","path":"/spec/plugins/-","value":"kuadrant-console-plugin"}]'
+    ```
+    Reload the browser after ~1 min. **Policy Topology** is the best picture for this part: it
+    draws Gateway → HTTPRoute → Services, with the AuthPolicy and TokenRateLimitPolicy attached.
+  * Without the plugin, plain OpenShift 4.22 has no Gateways page under **Networking** (only
+    Services, Routes, Ingresses, NetworkPolicies…). Use **Home > Search** (or **Home > API
+    Explorer**), project `ai-gateways`, resource **Gateway** / **HTTPRoute** / **AuthPolicy** /
+    **TokenRateLimitPolicy**, and project `maas-models` for **ReferenceGrant**. Each one opens
+    with its YAML and status.
+
+* **The objects, in a nutshell** (what each CRD is for; who owns it):
+
+  | Kind (API group) | In a nutshell | Here | Owner |
+  |---|---|---|---|
+  | `GatewayClass` (gateway.networking.k8s.io) | *Which implementation* runs gateways. Cluster-wide, like a StorageClass for traffic. | `openshift-default`: the Istio/Envoy inside OpenShift's ingress operator. No Service Mesh install needed. | cluster |
+  | `Gateway` | *An entry point*: "give me an Envoy listening on this port/hostname". The controller then creates a Deployment + Service for it. | `llm-gateway`, port 80, `allowedRoutes: Same` namespace. Envoy pod + Service `llm-gateway-openshift-default`. | platform team |
+  | `HTTPRoute` | *The routing table* attached to a Gateway (`parentRefs`): match on path/headers/query, optionally rewrite, send to `backendRefs` (Services). It doesn't read the body. | `llm-models`: `/qwen3-0-6b/v1/…` and `/gemma-3-270m-it/v1/…` → `URLRewrite` to `/v1/…` → the KServe Services in `maas-models`. | app / model team |
+  | `ReferenceGrant` | *Permission across namespaces.* By default a route may only send traffic to Services in **its own** namespace. A ReferenceGrant, created **in the target namespace**, says "HTTPRoutes from namespace X may point at Service Y here". Without it the route shows `ResolvedRefs=False / RefNotPermitted` and Envoy returns 500. | `allow-ai-gateways-qwen` and `allow-ai-gateways-gemma` in `maas-models`: routes from `ai-gateways` may use those two Services, and nothing else. | owner of the **target** namespace (the model team), not the gateway team |
+  | `Route` (route.openshift.io) | OpenShift's own ingress: hostname + TLS at the OpenShift router. | `llm-gateway`: `https://llm-gateway.<apps>` (edge TLS) → Service `llm-gateway-openshift-default`. Only needed because the Gateway is `ClusterIP`. | platform team |
+  | `AuthPolicy` (kuadrant.io) | Connectivity Link: *who may call*. Attached to a Gateway or HTTPRoute (`targetRef`). Authorino checks it: API keys, OIDC/JWT, Kubernetes tokens, plus CEL rules. | `llm-models-auth` (B2): API key from a Secret, free = Gemma only. | API owner |
+  | `TokenRateLimitPolicy` (kuadrant.io) | Connectivity Link: *how many tokens* per window and counter. Limitador counts them. | `llm-models-tokens` (B3): free 300 tokens/min, gold 20 000. | API owner |
+
+  Why the ReferenceGrant matters: the gateway team (namespace `ai-gateways`) can't simply point
+  at someone else's Services. The model owner (namespace `maas-models`) decides which Services may
+  be reached and from which namespace. It's the Gateway API answer to "a route in any namespace
+  could otherwise expose any Service in the cluster". Remove it and the route breaks:
+  `oc get httproute llm-models -n ai-gateways -o yaml` shows `RefNotPermitted`.
+
 * **What happens:** `$G` is Route `llm-gateway` (edge TLS at the OpenShift router) → Service
   `llm-gateway-openshift-default` → the Envoy pod that the `openshift-default` GatewayClass (the
   Istio inside OpenShift's ingress operator) created for `Gateway llm-gateway`. The Kuadrant
