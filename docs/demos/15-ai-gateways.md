@@ -471,13 +471,15 @@ spec:
   targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: llm-models}
   rules:
     authentication:
-      api-key:
+      api-key-consumers:
         apiKey:
+          allNamespaces: true                  # Authorino runs in kuadrant-system; keys live in ai-gateways
           selector:
             matchLabels:
               llm-gateway/consumer: "true"     # every Secret with this label is a valid key
         credentials:
           authorizationHeader: {prefix: APIKEY}
+    # authorization: (free may only call Gemma), see B2
     response:
       success:
         filters:
