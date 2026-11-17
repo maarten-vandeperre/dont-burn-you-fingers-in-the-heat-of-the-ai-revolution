@@ -209,6 +209,34 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
   copies it into an `X-Model` header (`model_to_header`) and routes on that. Gateway API can't do
   this: it matches paths and headers, never the body."
 
+**A1, devil's advocate: "that's just header-based routing, why not Istio, Connectivity Link or Camel?"**
+
+The router at the end *is* header-based. The point is where the header comes from: **the client
+never sends it.** An OpenAI client (the Python/JS SDK, LangChain, Continue, Claude Code through
+A2) only knows a base URL and puts the model in the JSON body. `X-Model` is created inside Praxis
+by `model_to_header`, after it has read and parsed that body. Take that step away and every
+option below has to answer "how do I get the model out of the body?":
+
+| Option | Can it route on `"model"` in the body? | What it costs |
+|---|---|---|
+| **Gateway API / Istio** (HTTPRoute, VirtualService) | No. Matches are path, method, headers and query parameters; Envoy's router never looks at the body. | Works only if **every client sends a header** (`-H 'x-model: …'`, `default_headers` in the SDK) or uses a path per model (Part B, MaaS on 3.4). A client that sets one header but a different `model` gets one model's routing and another's name: the gateway trusts a header it can't check against the body. |
+| **Istio + body-to-header extension** | Yes, with extra parts: an `ext_proc` server (e.g. the body-based router of the Gateway API Inference Extension, which is what MaaS's `payload-processing` filter in `openshift-ingress` is for), or Lua/wasm code in an EnvoyFilter. | Another service in every request's path, or code in the proxy, which you build, run and upgrade yourself. It gives you the routing header, nothing else: no protocol translation, token counting or guardrails. |
+| **Connectivity Link** | No. Its policies see headers, path and identity. `requestBodyJSON()` doesn't exist on the request side (Part F, "If something goes wrong": using it breaks the rate limits); it only reads the *response* body (`usage.total_tokens`). | Same as Gateway API: it's a policy layer *on* Gateway API, not a different router. It decides **who** may call, not **which model** gets the call. |
+| **Camel** | Yes: parse the JSON, `choice().when(jsonpath("$.model") …)`, `toD(...)`. Demo 1's Camel model router does exactly that, and even chooses the model from the prompt. | It's an application you write, build and deploy, in Java, with your own HTTP handling: streaming (SSE) pass-through, Anthropic ⇄ OpenAI translation incl. streaming, token metrics, TLS to the workloads, back-pressure. Right tool when the routing is business logic (content-based, calling other services); a lot of code for "proxy this request to the right model". |
+| **Praxis** | Yes, as config: `model_to_header` + `router` (A1) or one `model_to_provider` table (Part F). | Alpha. In return, the body is parsed once and the same parse feeds the routing, translation (A2), token counting (A3), guardrails (E, F3) and model aliases (F1). |
+
+So the honest comparison isn't "Praxis vs header routing". It's **who turns the body into a
+routing decision**: every client (headers), an extra service next to Envoy (`ext_proc`), your
+own application (Camel), or the AI gateway itself (Praxis). Once the decision is a header, Istio
+and Connectivity Link handle it fine, which is exactly how Part F splits the work. Connectivity
+Link routes on **path and headers** (`/v1` vs `/v2`, `x-api-version`) and decides **who** may
+call. Praxis, behind it, reads the **body**.
+
+When *not* to use Praxis for this: if all clients are yours and can send a model header, or one
+path per model is acceptable (MaaS's choice on 3.4), plain Gateway API is enough and you skip a
+hop. If the model should be picked from the *content* of the prompt, that's Camel's job (demo 1),
+not Praxis 0.9.0's.
+
 **A2. Anthropic clients on OpenAI-only models.**
 * **Do:**
   ```bash
