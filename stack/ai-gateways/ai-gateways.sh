@@ -224,11 +224,13 @@ console() {
   need oc
   step "AI Gateway Console (React UI, built in the cluster)"
   oc apply -k "${GW_DIR}/console/openshift" >/dev/null
-  local tmp tgz; tmp=$(mktemp -d); tgz="${tmp}/console.tgz"
-  # upload the sources only (no node_modules / dist): the Dockerfile runs npm ci + vite build
-  tar -C "${GW_DIR}/console" --exclude node_modules --exclude dist -czf "$tgz" .
-  oc start-build ai-gateway-console -n "$NS" --from-archive="$tgz" --wait >/dev/null \
-    || die "console build failed: oc logs -f bc/ai-gateway-console -n ${NS}"
+  # Upload the sources only (no node_modules / dist; the Dockerfile runs npm ci + vite build).
+  # Staged in a temp dir and packed by oc itself (--from-dir): an archive made by the local tar
+  # can carry macOS extended attributes the builder can't extract (FetchSourceFailed).
+  local tmp; tmp=$(mktemp -d)
+  rsync -a --exclude node_modules --exclude dist --exclude '.DS_Store' "${GW_DIR}/console/" "${tmp}/console/"
+  oc start-build ai-gateway-console -n "$NS" --from-dir="${tmp}/console" --wait >/dev/null \
+    || { rm -rf "$tmp"; die "console build failed: oc logs -f bc/ai-gateway-console -n ${NS}"; }
   rm -rf "$tmp"
   oc rollout status deploy/ai-gateway-console -n "$NS" --timeout=180s >/dev/null && ok "console: https://$(route_host ai-gateway-console)"
 }
