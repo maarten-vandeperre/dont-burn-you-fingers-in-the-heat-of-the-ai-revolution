@@ -2143,7 +2143,14 @@ test_models() {
   [[ -n "$key" ]] || die "could not create an API key (check: oc get maassubscription -n ${MAAS_POLICY_NS})"
   ok "API key created (subscription small-models-free, expires in 1h)"
 
-  models=$("${CURL[@]}" "https://${host}/v1/models" -H "Authorization: Bearer ${key}")
+  # A key used right after it was minted can get a 500 from maas-api (key validation lookup);
+  # the same call works a moment later. Retry a few times before reporting.
+  local try
+  for try in 1 2 3 4 5; do
+    models=$("${CURL[@]}" "https://${host}/v1/models" -H "Authorization: Bearer ${key}")
+    jq -e '.data' <<<"$models" >/dev/null 2>&1 && break
+    sleep 2
+  done
   info "models visible to this key: $(jq -r '[.data[].id] | join(", ")' <<<"$models" 2>/dev/null || echo "$models")"
 
   for m in "${MODELS[@]}"; do
