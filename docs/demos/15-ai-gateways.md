@@ -265,6 +265,41 @@ not Praxis 0.9.0's.
   streaming included. An Anthropic-only client such as Claude Code can now use models served by
   OpenShift AI."
 
+**A2, devil's advocate: "Camel translates Anthropic too, we have it in this repo. Why Praxis?"**
+
+Camel *can* do this; it's an integration framework and JSON-to-JSON mapping is its home ground.
+But look at what the two Camel apps in this repository actually translate:
+
+| | Camel in this repo ([`camel-ai-demo`](../../app/camel-ai-demo/README.md), [`camel-ai-router`](../../app/camel-ai-router/README.md)) | Praxis in A2 |
+|---|---|---|
+| Direction | **outbound**: the caller speaks Camel's own API (`/api/chat/{provider}`) or OpenAI; Camel *calls* Anthropic as a backend (`AnthropicGateway`, `AnthropicClient`) | **inbound**: the caller speaks the **Anthropic** API (`/v1/messages`), the backend speaks OpenAI |
+| Who must adapt | the client uses Camel's API | nobody: Claude Code is pointed at a base URL (`ANTHROPIC_BASE_URL`), nothing else changes |
+| Streaming | request/response (no SSE) | OpenAI SSE chunks re-emitted as Anthropic events (`message_start`, `content_block_delta`…, `message_stop`) |
+| Effort | a route / class per provider, built and deployed | two filters and a `path_rewrite` in the existing proxy config |
+
+Turning Camel into what A2 does means implementing the **Anthropic Messages API as a server**:
+- the request: top-level `system`, content blocks, `stop_sequences`, `max_tokens`, `tools`;
+- the response: `content` blocks, `stop_reason`, `usage.input_tokens` / `output_tokens`, Anthropic
+  error bodies;
+- **streaming**: an Anthropic stream is a stateful event sequence (open a message, open a content
+  block, deltas, close the block, a `message_delta` with the usage, close the message), built
+  chunk by chunk from OpenAI's very different stream, while it flows. Camel routes usually work on
+  whole message bodies, so streaming means low-level code next to the routes. Coding agents like
+  Claude Code stream by default, so this is the part that matters.
+
+That is a protocol adapter you own, test against each client release, and keep up to date as the
+API grows. In Praxis it's maintained once, upstream, and runs in the same pass as routing (A1)
+and token counting (A3).
+
+When Camel is still the better choice: the "translation" is really **business logic**. Examples:
+a stable company API in front of changing providers (what `camel-ai-demo` does), fallback between
+providers with your own health rules (`camel-ai-router`), or a call that also needs files, Kafka,
+a database or a human approval. A proxy shouldn't do that.
+
+Honest limit of A2: we checked plain messages and streaming here. Claude Code also relies heavily
+on **tool use** (`tool_use` / `tool_result` blocks ⇄ OpenAI `tool_calls`), and a 0.6B CPU model is
+a weak tool caller anyway. Try your real client and a capable model before you promise it.
+
 **A3. Tokens and time to first token, per model.**
 * **Do:** `./deploy.sh ai-gateways metrics` (Praxis section), or in the console **Observe > Metrics**:
   ```promql
