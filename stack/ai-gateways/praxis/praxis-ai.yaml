@@ -1,0 +1,498 @@
+# Praxis AI gateway config (ghcr.io/praxis-proxy/ai:0.9.0, built on Praxis core 0.7.5).
+# Mounted from ConfigMap praxis-ai-config (kustomization.yaml generates it from this file) as a
+# directory, so `oc edit configmap praxis-ai-config` hot-reloads it without a pod restart.
+#
+# Listeners, one per story in docs/demos/15-ai-gateways.md:
+#   :8080 direct    body "model" -> the right KServe workload, Anthropic <-> OpenAI translation,
+#                   token + time-to-first-token metrics. No auth: Praxis is the data plane only.
+#   :8081 limited   the same, behind a request-rate token bucket (5 req/s, burst 5)
+#   :8082 via-maas  Praxis IN FRONT OF the OpenShift AI MaaS gateway: Anthropic clients
+#                   (Claude Code, ...) on MaaS-governed models; Praxis is the MaaS consumer
+#                   (its own MaaS key, injected for every request on this listener).
+#                   No public Route: reach it with oc port-forward (see the demo guide).
+#   :8083 guarded   :8080 behind NeMo Guardrails (filter ai_guardrails, config "confidential"):
+#                   secrets in the prompt or the answer -> 403, personal data masked before
+#                   the model sees it. OpenAI Chat Completions, non-streaming.
+#
+# Part F, "Connectivity Link + Praxis": the LLM API product. Clients never reach these three
+# listeners directly (no Route): the Connectivity Link llm-gateway authenticates the consumer,
+# throttles, counts tokens and versions the API, then hands the request to Praxis together with
+# two identity headers it injected (x-consumer, x-consumer-tier).
+#   :8084 api-v1         API version 1 (deprecated): local models only, model named in the body
+#   :8085 api-v2         API version 2: model aliases, local models AND OpenAI, identity-aware
+#                        routing (only gold may use OpenAI), confidential data stays local
+#   :8086 openai-egress  127.0.0.1 only, the single way out to api.openai.com: guardrails (coffee,
+#                        lemons, email addresses -> 403) and OpenAI key injection
+#
+# The model workloads (LLMInferenceService, maas-models) serve HTTPS with a certificate signed by
+# the OpenShift service CA, so Praxis verifies them against the injected service CA bundle and
+# connects with the Service's DNS name as SNI. No `verify: false` anywhere.
+
+# ai_guardrails calls NeMo Guardrails at a private (cluster) address. Praxis refuses private
+# callout targets unless this is set (SSRF guard). The NetworkPolicy in stack/ai-gateways/
+# guardrails/ lets only Praxis reach NeMo, which is the only callout in this config.
+insecure_options:
+  allow_private_upstreams: true
+  # Part F: api-v2 reaches the openai-egress listener over loopback (127.0.0.1:8086), which the
+  # SSRF guard treats as sensitive. Every endpoint in this file is static, none comes from a
+  # request, so allowing it opens nothing a client can steer.
+  allow_private_endpoints: true
+
+admin:
+  # Kubelet probes and Prometheus reach the pod IP, so bind all interfaces.
+  metrics_address: "0.0.0.0:9902"
+  verbose: true
+
+# Top-level clusters carry the health checks. Praxis AI 0.9.0 (core 0.7.5) needs the endpoints
+# and connection settings repeated on the load_balancer entries further down.
+clusters:
+  - name: qwen
+    endpoints:
+      - "qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local:8000"
+    trusted_private_endpoints:
+      - qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local
+    tls:
+      sni: qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local
+      ca:
+        ca_path: /etc/service-ca/service-ca.crt
+    health_check:
+      # tcp, not http: in Praxis core 0.7.5 an http probe is plaintext and can't reach a TLS
+      # backend (Praxis logs a warning and marks the endpoint unhealthy).
+      type: tcp
+      interval_ms: 5000
+      timeout_ms: 2000
+      healthy_threshold: 1
+      unhealthy_threshold: 2
+  - name: gemma
+    endpoints:
+      - "gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local:8000"
+    trusted_private_endpoints:
+      - gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local
+    tls:
+      sni: gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local
+      ca:
+        ca_path: /etc/service-ca/service-ca.crt
+    health_check:
+      # tcp, not http: in Praxis core 0.7.5 an http probe is plaintext and can't reach a TLS
+      # backend (Praxis logs a warning and marks the endpoint unhealthy).
+      type: tcp
+      interval_ms: 5000
+      timeout_ms: 2000
+      healthy_threshold: 1
+      unhealthy_threshold: 2
+
+listeners:
+  - name: direct
+    address: "0.0.0.0:8080"
+    filter_chains: [observability, classify, translate, models]
+  # rate_limit is a security filter: Praxis refuses a condition on it (a condition is a bypass),
+  # so the limited variant is its own listener with one extra chain.
+  - name: limited
+    address: "0.0.0.0:8081"
+    filter_chains: [observability, throttle, catalog-v1, classify, translate, models]
+  - name: via-maas
+    address: "0.0.0.0:8082"
+    filter_chains: [observability, classify, translate, maas]
+  # ai_guardrails is a security filter (no conditions allowed), so guarded traffic gets its own
+  # listener. No translate chain: NeMo masking (a "modified" verdict) can only rewrite OpenAI
+  # Chat bodies; an Anthropic request with a masked message would be refused with 502.
+  - name: guarded
+    address: "0.0.0.0:8083"
+    filter_chains: [observability, classify, guard, models]
+  # Part F: behind the Connectivity Link llm-gateway (HTTPRoutes llm-api-v1 / llm-api-v2)
+  - name: api-v1
+    address: "0.0.0.0:8084"
+    filter_chains: [api-observability, classify, catalog-v1, unknown-model-v1, models]
+  - name: api-v2
+    address: "0.0.0.0:8085"
+    filter_chains: [api-observability, data-classification, classify, catalog-v2, unknown-model-v2, tier-gate, model-routing]
+  # Egress to OpenAI: guardrails and rate_limit-like security filters can't take conditions
+  # ("only for OpenAI traffic"), so OpenAI-bound requests hop over a loopback listener that
+  # applies them to everything it sees. Bound to 127.0.0.1: unreachable from outside the pod.
+  - name: openai-egress
+    address: "127.0.0.1:8086"
+    filter_chains: [observability, openai-guardrails, openai]
+
+filter_chains:
+  - name: observability
+    filters:
+      - filter: request_id
+      - filter: access_log
+
+  - name: throttle
+    filters:
+      - filter: rate_limit
+        mode: global
+        rate: 5          # tokens (requests) added per second  <- "max 5 requests per second"
+        burst: 5         # bucket size: at most 5 at once, then 5 per second
+
+  # Part F: request id + access log (status, duration_ms, cluster, upstream) per request.
+  # WHO called is known by Connectivity Link (Limitador metrics, labels user/tier); WHICH model by
+  # Praxis (praxis_ai_*_tokens_total{model}); the console joins both per request.
+  - name: api-observability
+    filters:
+      - filter: request_id
+      - filter: access_log
+
+  # Which AI API is this (from method + path), and which model (from the JSON body)?
+  - name: classify
+    filters:
+      - filter: ai_operation
+      - filter: anthropic_messages_request
+        on_invalid: continue
+        conditions:
+          - when:
+              path: "/v1/messages"
+      - filter: openai_chat_completions_request
+        conditions:
+          - when:
+              path: "/v1/chat/completions"
+      # body "model" -> X-Model header; replaces any X-Model the client sent
+      - filter: model_to_header
+        header: X-Model
+
+  # Anthropic Messages clients -> OpenAI Chat Completions backends (request, response, stream).
+  - name: translate
+    filters:
+      - filter: anthropic_messages_to_chat_completions
+        conditions:
+          - when:
+              path: "/v1/messages"
+      - filter: anthropic_messages_to_chat_completions_stream
+        conditions:
+          - when:
+              path: "/v1/messages"
+        response_conditions:
+          - when:
+              headers:
+                content-type: "text/event-stream"
+      - filter: path_rewrite
+        replace:
+          pattern: "^/v1/messages$"
+          replacement: "/v1/chat/completions"
+        conditions:
+          - when:
+              path: "/v1/messages"
+
+  # NeMo Guardrails, before (request) and after (response) the model. Needs ai_operation first
+  # (classify chain): it picks the extractor for the request/response body.
+  #   passed   -> forwarded unchanged
+  #   blocked  -> 403 to the client, the model never sees the prompt / the client the answer
+  #   modified -> masked user messages forwarded (personal data -> <EMAIL_ADDRESS>, ...)
+  #   NeMo down / timeout -> 500 (failure_mode closed: no unscreened traffic)
+  # With phase.response, streaming chat requests are refused (422) until Praxis screens SSE.
+  - name: guard
+    filters:
+      - filter: ai_guardrails
+        outbound_chain: nemo-outbound
+        provider:
+          type: nemo                   # the only provider type in Praxis AI 0.9.0
+          endpoint: "http://nemo-guardrails.ai-gateways.svc.cluster.local:8000/v1/checks"
+          guardrails:
+            config_ids: ["confidential"]
+          timeout_ms: 15000
+          max_message_checks: 32
+        phase:
+          request: true
+          response: true
+
+  # Observability for the NeMo callouts; carries no credentials.
+  - name: nemo-outbound
+    filters:
+      - filter: request_id
+
+  # Straight to the model workloads, routed on the model name.
+  - name: models
+    filters:
+      - filter: router
+        routes:
+          - path_prefix: "/v1/"
+            headers:
+              x-model: qwen3-0-6b
+            cluster: qwen
+          - path_prefix: "/v1/"
+            headers:
+              x-model: gemma-3-270m-it
+            cluster: gemma
+      # sets stream_options.include_usage so streamed tokens are counted for every client
+      - filter: stream_usage_inject
+      # response filters run in reverse: token_count reads the OpenAI usage block before the
+      # Anthropic translation rewrites the body (praxis_ai_prompt/output_tokens_total{model,cluster})
+      - filter: token_count
+        provider: openai
+      - filter: time_to_first_token
+      - filter: load_balancer
+        clusters:
+          - name: qwen
+            endpoints:
+              - "qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local:8000"
+            trusted_private_endpoints:
+              - qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local
+            tls:
+              sni: qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local
+              ca:
+                ca_path: /etc/service-ca/service-ca.crt
+          - name: gemma
+            endpoints:
+              - "gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local:8000"
+            trusted_private_endpoints:
+              - gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local
+            tls:
+              sni: gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local
+              ca:
+                ca_path: /etc/service-ca/service-ca.crt
+
+  # Everything to the MaaS gateway's in-cluster HTTP listener. The client's own
+  # "Authorization: Bearer sk-oai-..." MaaS key is passed through untouched; MaaS does
+  # authentication, subscriptions and token quotas, Praxis does protocol translation.
+  - name: maas
+    filters:
+      # MaaS on OpenShift AI 3.4 routes per model on the path (/maas-models/<model>/v1/...), not
+      # on the body. Praxis already knows the model (X-Model), so it builds that path: clients
+      # keep one base URL and put the model in the body.
+      # Every path_rewrite matches the ORIGINAL path and the last one that applies wins
+      # (allow_rewrite_override), so /v1/messages (already rewritten to /v1/chat/completions by
+      # the translate chain) needs its own rule that writes the final MaaS chat path.
+      - filter: path_rewrite
+        replace:
+          pattern: "^/v1/"
+          replacement: "/maas-models/qwen3-0-6b/v1/"
+        allow_rewrite_override: true
+        conditions:
+          - when:
+              headers:
+                x-model: qwen3-0-6b
+      - filter: path_rewrite
+        replace:
+          pattern: "^/v1/messages$"
+          replacement: "/maas-models/qwen3-0-6b/v1/chat/completions"
+        allow_rewrite_override: true
+        conditions:
+          - when:
+              path: "/v1/messages"
+              headers:
+                x-model: qwen3-0-6b
+      - filter: path_rewrite
+        replace:
+          pattern: "^/v1/"
+          replacement: "/maas-models/gemma-3-270m-it/v1/"
+        allow_rewrite_override: true
+        conditions:
+          - when:
+              headers:
+                x-model: gemma-3-270m-it
+      - filter: path_rewrite
+        replace:
+          pattern: "^/v1/messages$"
+          replacement: "/maas-models/gemma-3-270m-it/v1/chat/completions"
+        allow_rewrite_override: true
+        conditions:
+          - when:
+              path: "/v1/messages"
+              headers:
+                x-model: gemma-3-270m-it
+      - filter: router
+        routes:
+          - path_prefix: "/"           # the path may already be rewritten to /maas-models/...
+            cluster: maas
+      - filter: headers
+        request_set:
+          - name: Host
+            value: maas.apps.cluster-cfhnl.dyn.redhatworkshops.io   # rewritten by ai-gateways.sh deploy
+      # Praxis calls MaaS as ONE consumer with its own MaaS key (Secret praxis-maas-key, env
+      # MAAS_API_KEY), for every request on this listener:
+      #  - the Anthropic translation strips the caller's x-api-key / Authorization on purpose (an
+      #    Anthropic credential must never reach an OpenAI backend), so a credential has to be
+      #    injected anyway;
+      #  - credential_injection is a security filter: Praxis refuses a condition on it, so it
+      #    can't be "only for /v1/messages".
+      # MaaS therefore sees one consumer with one subscription and one token quota. That is why
+      # this listener has no public Route.
+      - filter: credential_injection
+        clusters:
+          - name: maas
+            header: Authorization
+            header_prefix: "Bearer "
+            env_var: MAAS_API_KEY
+            strip_client_credential: true
+      - filter: stream_usage_inject
+      - filter: token_count
+        provider: openai
+      - filter: time_to_first_token
+      - filter: load_balancer
+        clusters:
+          - name: maas
+            endpoints:
+              - "maas-default-gateway-openshift-default.openshift-ingress.svc.cluster.local:80"
+            trusted_private_endpoints:
+              - maas-default-gateway-openshift-default.openshift-ingress.svc.cluster.local
+
+  # ===========================================================================================
+  # Part F: the LLM API behind Connectivity Link (listeners api-v1, api-v2, openai-egress).
+  # Connectivity Link has already authenticated the caller, applied the request throttle and
+  # the token quota, and set x-consumer / x-consumer-tier. Praxis does what needs the body.
+  # ===========================================================================================
+
+  # GET /v1/models: the model catalog of each API version, answered by Praxis itself (cheap:
+  # the throttle demo fires bursts at it without loading a CPU model).
+  - name: catalog-v1
+    filters:
+      - filter: static_response
+        status: 200
+        headers: [{name: content-type, value: application/json}]
+        body: '{"object":"list","api_version":"v1","data":[{"id":"qwen3-0-6b","object":"model","owned_by":"local"},{"id":"gemma-3-270m-it","object":"model","owned_by":"local"}]}'
+        conditions:
+          - when:
+              path: "/v1/models"
+  - name: catalog-v2
+    filters:
+      - filter: static_response
+        status: 200
+        headers: [{name: content-type, value: application/json}]
+        body: '{"object":"list","api_version":"v2","data":[{"id":"qwen3-0-6b","object":"model","owned_by":"local"},{"id":"gemma-3-270m-it","object":"model","owned_by":"local"},{"id":"gpt-4o-mini","object":"model","owned_by":"openai","tier":"gold"},{"id":"fast","object":"alias","target":"gemma-3-270m-it"},{"id":"smart","object":"alias","target":"qwen3-0-6b"},{"id":"cloud","object":"alias","target":"gpt-4o-mini"}]}'
+        conditions:
+          - when:
+              path: "/v1/models"
+
+  # Confidential data never leaves the cluster: "x-data-classification: confidential" pins the
+  # request to the in-house Qwen, whatever model the client asked for (OpenAI included).
+  # Runs before classify, so X-Model and the routing below already see the rewritten model.
+  - name: data-classification
+    filters:
+      - filter: json_body
+        request_replace: [{pointer: /model, value: qwen3-0-6b}]
+        conditions:
+          - when:
+              headers:
+                x-data-classification: confidential
+
+  # OpenAI costs money: only the gold tier may use it. x-consumer-tier is set by the
+  # Connectivity Link AuthPolicy (overwriting anything the client sent). Who is calling comes
+  # from Connectivity Link, what is asked from the body: neither gateway can do this alone.
+  - name: tier-gate
+    filters:
+      - filter: static_response
+        status: 403
+        headers: [{name: content-type, value: application/json}]
+        body: '{"error":{"type":"tier_not_allowed","message":"OpenAI models need the gold tier; use a local model or ask for an upgrade"}}'
+        conditions:
+          - when: {headers: {x-model: gpt-4o-mini}}
+          - unless: {headers: {x-consumer-tier: gold}}
+      - filter: static_response
+        status: 403
+        headers: [{name: content-type, value: application/json}]
+        body: '{"error":{"type":"tier_not_allowed","message":"cloud (OpenAI) needs the gold tier; use a local model or ask for an upgrade"}}'
+        conditions:
+          - when: {headers: {x-model: cloud}}
+          - unless: {headers: {x-consumer-tier: gold}}
+
+  # Not a model of this API version -> 404 with a JSON body. (Without it, v1 answers a bare 404
+  # with no body framing that Envoy waits on, and v2 a 500 from a load balancer with no cluster.)
+  - name: unknown-model-v1
+    filters:
+      - filter: static_response
+        status: 404
+        headers: [{name: content-type, value: application/json}]
+        body: '{"error":{"type":"model_not_found","message":"API v1 serves qwen3-0-6b and gemma-3-270m-it only; aliases and OpenAI models are in /v2"}}'
+        conditions:
+          - unless: {headers: {x-model: qwen3-0-6b}}
+          - unless: {headers: {x-model: gemma-3-270m-it}}
+  - name: unknown-model-v2
+    filters:
+      - filter: static_response
+        status: 404
+        headers: [{name: content-type, value: application/json}]
+        body: '{"error":{"type":"model_not_found","message":"unknown model; GET /v2/models lists models and aliases"}}'
+        conditions:
+          - unless: {headers: {x-model: qwen3-0-6b}}
+          - unless: {headers: {x-model: gemma-3-270m-it}}
+          - unless: {headers: {x-model: gpt-4o-mini}}
+          - unless: {headers: {x-model: fast}}
+          - unless: {headers: {x-model: smart}}
+          - unless: {headers: {x-model: cloud}}
+
+  # Model routing: one table. The client names a model or an alias, Praxis picks the upstream
+  # cluster and rewrites "model" in the body to the name that upstream serves. Aliases let the
+  # platform swap the model behind "fast" / "smart" / "cloud" without touching any client.
+  # Unknown model -> no mapping -> 404.
+  - name: model-routing
+    filters:
+      - filter: model_to_provider
+        models:
+          - {model: qwen3-0-6b,      upstream: qwen,          target_model: qwen3-0-6b,      paths: ["/v1/chat/completions"]}
+          - {model: gemma-3-270m-it, upstream: gemma,         target_model: gemma-3-270m-it, paths: ["/v1/chat/completions"]}
+          - {model: gpt-4o-mini,     upstream: openai-egress, target_model: gpt-4o-mini,     paths: ["/v1/chat/completions"]}
+          - {model: fast,            upstream: gemma,         target_model: gemma-3-270m-it, paths: ["/v1/chat/completions"]}
+          - {model: smart,           upstream: qwen,          target_model: qwen3-0-6b,      paths: ["/v1/chat/completions"]}
+          - {model: cloud,           upstream: openai-egress, target_model: gpt-4o-mini,     paths: ["/v1/chat/completions"]}
+      - filter: stream_usage_inject
+      - filter: token_count              # local AND OpenAI tokens, per model
+        provider: openai
+      - filter: time_to_first_token
+      - filter: load_balancer
+        clusters:
+          - name: qwen
+            endpoints:
+              - "qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local:8000"
+            trusted_private_endpoints:
+              - qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local
+            tls:
+              sni: qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local
+              ca:
+                ca_path: /etc/service-ca/service-ca.crt
+          - name: gemma
+            endpoints:
+              - "gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local:8000"
+            trusted_private_endpoints:
+              - gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local
+            tls:
+              sni: gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local
+              ca:
+                ca_path: /etc/service-ca/service-ca.crt
+          - name: openai-egress          # loopback hop to the openai-egress listener
+            endpoints:
+              - "127.0.0.1:8086"
+
+  # Guardrails for everything that leaves for OpenAI. Native Praxis rules, no external service:
+  # a match anywhere in the request body -> 403, OpenAI never sees the prompt. Local models are
+  # not affected (they never pass this listener).
+  - name: openai-guardrails
+    filters:
+      - filter: guardrails
+        rules:
+          - target: body
+            pattern: "(?i)\\bcoffee\\b"        # topic: coffee
+          - target: body
+            pattern: "(?i)\\blemons?\\b"       # topic: lemon / lemons
+          - target: body
+            contains: [email]                 # built-in PII detector: email addresses
+
+  # The only way out to OpenAI.
+  - name: openai
+    filters:
+      - filter: router
+        routes:
+          - path_prefix: "/v1/"
+            cluster: openai
+      - filter: headers
+        request_set:
+          - name: Host
+            value: api.openai.com
+        # internal headers stay inside the company
+        request_remove: [x-consumer, x-consumer-tier, x-model, x-data-classification]
+      # The OpenAI key lives in Secret praxis-openai-key (./deploy.sh ai-gateways openai-key);
+      # whatever credential the client sent is removed first.
+      - filter: credential_injection
+        clusters:
+          - name: openai
+            header: Authorization
+            header_prefix: "Bearer "
+            env_var: OPENAI_API_KEY
+            strip_client_credential: true
+      - filter: load_balancer
+        clusters:
+          - name: openai
+            endpoints:
+              - "api.openai.com:443"
+            tls:
+              sni: api.openai.com              # public CA, system trust store

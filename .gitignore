@@ -34,3 +34,5 @@ replay_pid*
 .gradle/
 build/
 .env
+# AI gateways demo: local consumer API keys (./deploy.sh ai-gateways key)
+stack/ai-gateways/.keys.env

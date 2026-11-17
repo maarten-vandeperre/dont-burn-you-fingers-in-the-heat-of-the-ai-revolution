@@ -1,0 +1,40 @@
+# One edge-TLS Route per Praxis listener, except via-maas (:8082): that one calls MaaS with
+# Praxis's own MaaS key for Anthropic requests, so it is not published; use oc port-forward.
+# Hostnames are left to OpenShift
+# (<name>-ai-gateways.<apps-domain>); `./deploy.sh ai-gateways urls` prints them.
+# Long timeout: the CPU models can take a minute to answer.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: praxis-ai
+  namespace: ai-gateways
+  annotations:
+    haproxy.router.openshift.io/timeout: 180s
+spec:
+  to: {kind: Service, name: praxis-ai}
+  port: {targetPort: direct}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: praxis-ai-limited
+  namespace: ai-gateways
+  annotations:
+    haproxy.router.openshift.io/timeout: 180s
+spec:
+  to: {kind: Service, name: praxis-ai}
+  port: {targetPort: limited}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: praxis-ai-guarded
+  namespace: ai-gateways
+  annotations:
+    haproxy.router.openshift.io/timeout: 180s
+spec:
+  to: {kind: Service, name: praxis-ai}
+  port: {targetPort: guarded}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}

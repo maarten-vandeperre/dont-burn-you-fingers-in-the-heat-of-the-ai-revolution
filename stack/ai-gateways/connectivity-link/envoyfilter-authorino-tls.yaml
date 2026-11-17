@@ -1,0 +1,45 @@
+# Same fix as stack/connectivity/partner-api/envoyfilter-authorino-tls.yaml, scoped to
+# llm-gateway: Authorino's gRPC listener has TLS enabled on this cluster, but the EnvoyFilter
+# kuadrant-operator generates for a Gateway that OpenShift AI does not manage talks to it in
+# plaintext (symptom: every request 500, "gRPC status code is not OK" in the gateway log).
+# The MaaS gateway gets the equivalent from odh-model-controller (maas-default-gateway-authn-ssl).
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: llm-gateway-authn-ssl
+  namespace: ai-gateways
+spec:
+  priority: -1
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: llm-gateway
+  configPatches:
+    - applyTo: CLUSTER
+      match:
+        cluster:
+          service: authorino-authorino-authorization.kuadrant-system.svc.cluster.local
+      patch:
+        operation: ADD
+        value:
+          name: kuadrant-auth-service
+          type: STRICT_DNS
+          connect_timeout: 1s
+          lb_policy: ROUND_ROBIN
+          http2_protocol_options: {}
+          load_assignment:
+            cluster_name: kuadrant-auth-service
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: authorino-authorino-authorization.kuadrant-system.svc.cluster.local
+                          port_value: 50051
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              common_tls_context:
+                validation_context:
+                  trusted_ca:
+                    filename: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt

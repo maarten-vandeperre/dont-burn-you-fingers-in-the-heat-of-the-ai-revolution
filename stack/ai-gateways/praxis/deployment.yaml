@@ -1,0 +1,120 @@
+# Praxis AI: one Deployment, one ConfigMap, no operator and no CRDs. Runs unmodified under
+# OpenShift's restricted-v2 SCC (random UID, read-only root filesystem, no capabilities).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-gateways-service-ca
+  namespace: ai-gateways
+  annotations:
+    # The service CA operator fills in key service-ca.crt: the CA that signed the KServe
+    # workload certificates in maas-models.
+    service.beta.openshift.io/inject-cabundle: "true"
+data: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: praxis-ai
+  namespace: ai-gateways
+  labels:
+    app: praxis-ai
+    app.kubernetes.io/part-of: ai-gateways-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: praxis-ai
+  template:
+    metadata:
+      labels:
+        app: praxis-ai
+        app.kubernetes.io/part-of: ai-gateways-demo
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: praxis-ai
+          image: ghcr.io/praxis-proxy/ai:0.9.0
+          command: ["praxis-ai", "-c", "/etc/praxis/praxis-ai.yaml"]
+          env:
+            # Praxis's own MaaS API key (created by ./deploy.sh ai-gateways deploy), used by the
+            # credential_injection filter on the via-maas listener
+            - name: MAAS_API_KEY
+              valueFrom:
+                secretKeyRef: {name: praxis-maas-key, key: MAAS_API_KEY}
+            # The OpenAI key (Secret praxis-openai-key, ./deploy.sh ai-gateways openai-key), used
+            # only by credential_injection on the 127.0.0.1 openai-egress listener. Without a
+            # real key OpenAI answers 401; the guardrails still block before that.
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef: {name: praxis-openai-key, key: OPENAI_API_KEY}
+          ports:
+            - {name: direct, containerPort: 8080}
+            - {name: limited, containerPort: 8081}
+            - {name: via-maas, containerPort: 8082}
+            - {name: guarded, containerPort: 8083}
+            - {name: api-v1, containerPort: 8084}     # behind Connectivity Link only (no Route)
+            - {name: api-v2, containerPort: 8085}     # behind Connectivity Link only (no Route)
+            - {name: metrics, containerPort: 9902}
+          # /healthy, not /ready: /ready is 503 as soon as ONE model has no healthy endpoint,
+          # which would take the whole gateway out of its Routes.
+          livenessProbe:
+            httpGet: {path: /healthy, port: metrics}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /healthy, port: metrics}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {cpu: "1", memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # directory mounts (no subPath), so ConfigMap edits reach the pod and hot-reload
+            - {name: config, mountPath: /etc/praxis, readOnly: true}
+            - {name: service-ca, mountPath: /etc/service-ca, readOnly: true}
+      volumes:
+        - name: config
+          configMap:
+            name: praxis-ai-config
+        - name: service-ca
+          configMap:
+            name: ai-gateways-service-ca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: praxis-ai
+  namespace: ai-gateways
+  labels:
+    app: praxis-ai
+spec:
+  selector:
+    app: praxis-ai
+  ports:
+    - {name: direct, port: 8080, targetPort: direct}
+    - {name: limited, port: 8081, targetPort: limited}
+    - {name: via-maas, port: 8082, targetPort: via-maas}
+    - {name: guarded, port: 8083, targetPort: guarded}
+    - {name: api-v1, port: 8084, targetPort: api-v1}
+    - {name: api-v2, port: 8085, targetPort: api-v2}
+    - {name: metrics, port: 9902, targetPort: metrics}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: praxis-ai
+  namespace: ai-gateways
+spec:
+  selector:
+    matchLabels:
+      app: praxis-ai
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s

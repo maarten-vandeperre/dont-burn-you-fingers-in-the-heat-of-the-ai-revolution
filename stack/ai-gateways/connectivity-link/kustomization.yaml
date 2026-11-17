@@ -1,0 +1,44 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - gateway.yaml
+  - httproute.yaml
+  - auth-policy.yaml
+  - token-rate-limit-policy.yaml
+  - envoyfilter-authorino-tls.yaml
+  # Part F: the LLM API (v1, v2) in front of Praxis, and its gateway-wide policies
+  - api-routes.yaml
+  - api-policies.yaml
+
+# Cluster specific value, written by ./deploy.sh ai-gateways deploy (same pattern as
+# platform/30-gateway and stack/connectivity/partner-api).
+configMapGenerator:
+  - name: llm-gateway-cluster-params
+    envs:
+      - cluster-params.env
+    options:
+      disableNameSuffixHash: true
+      annotations:
+        config.kubernetes.io/local-config: "true"
+
+replacements:
+  - source:
+      kind: ConfigMap
+      name: llm-gateway-cluster-params
+      fieldPath: data.LLM_GATEWAY_HOSTNAME
+    targets:
+      - select: {kind: Gateway, name: llm-gateway}
+        fieldPaths:
+          - spec.listeners.[name=http].hostname
+      - select: {kind: HTTPRoute, name: llm-models}
+        fieldPaths:
+          - spec.hostnames.0
+      - select: {kind: HTTPRoute, name: llm-api-v1}
+        fieldPaths:
+          - spec.hostnames.0
+      - select: {kind: HTTPRoute, name: llm-api-v2}
+        fieldPaths:
+          - spec.hostnames.0
+      - select: {kind: Route, name: llm-gateway}
+        fieldPaths:
+          - spec.host

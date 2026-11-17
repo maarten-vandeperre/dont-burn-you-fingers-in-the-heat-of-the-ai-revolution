@@ -1,0 +1,11 @@
+# One namespace for the two gateways this demo adds next to the existing OpenShift AI MaaS
+# gateway: Praxis AI and a hand-built Connectivity Link (Kuadrant) LLM gateway. All three front
+# the SAME two models in maas-models (qwen3-0-6b, gemma-3-270m-it), so the only variable in the
+# comparison is the gateway. Not in the mesh (no istio-discovery label): the models aren't either.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-gateways
+  labels:
+    app.kubernetes.io/part-of: ai-gateways-demo
+    openshift.io/user-monitoring: "true"

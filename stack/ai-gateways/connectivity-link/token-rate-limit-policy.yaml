@@ -1,0 +1,34 @@
+# Persona: API owner. Token quotas, not request quotas: the wasm shim reads usage.total_tokens
+# from each model response and charges it to the caller's counter in Limitador. Once the
+# counter is over the limit, the NEXT request gets a 429.
+#
+# This is exactly the object the MaaS controller generates per model from a MaaSSubscription
+# (oc get tokenratelimitpolicy maas-trlp-qwen3-0-6b -n maas-models -o yaml), written by hand.
+# Limits are deliberately tiny so a live demo hits them in a few calls.
+apiVersion: kuadrant.io/v1alpha1
+kind: TokenRateLimitPolicy
+metadata:
+  name: llm-models-tokens
+  namespace: ai-gateways
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: llm-models
+  limits:
+    free:
+      rates:
+        - limit: 300          # tokens per window, per consumer
+          window: 1m
+      when:
+        - predicate: auth.identity.tier == "free"
+      counters:
+        - expression: auth.identity.userid
+    gold:
+      rates:
+        - limit: 20000
+          window: 1m
+      when:
+        - predicate: auth.identity.tier == "gold"
+      counters:
+        - expression: auth.identity.userid

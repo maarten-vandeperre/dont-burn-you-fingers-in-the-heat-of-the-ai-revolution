@@ -1,0 +1,93 @@
+# Part F, persona: API owner. The LLM API as a product with two versions, on the same
+# llm-gateway as the per-model routes of Part B. Both versions end in Praxis AI, which does
+# what needs the request body (model routing, OpenAI, guardrails); Connectivity Link does
+# what needs the caller (API keys, throttling, token quotas, metrics per consumer).
+#
+#   https://llm-gateway.<domain>/v1/chat/completions                    -> Praxis api-v1 (:8084)
+#   https://llm-gateway.<domain>/v2/chat/completions                    -> Praxis api-v2 (:8085)
+#   https://llm-gateway.<domain>/v1/chat/completions + x-api-version: 2 -> Praxis api-v2 (:8085)
+#
+# Versioning is plain Gateway API: a path prefix per version, a header for clients that can't
+# change their base URL (a rule with more header matches wins over the same path without), and
+# response headers that tell v1 clients about the successor (RFC 9745 Deprecation, RFC 8594
+# Sunset, Link rel="successor-version").
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: llm-api-v1
+  namespace: ai-gateways
+  labels:
+    app.kubernetes.io/part-of: ai-gateways-demo
+spec:
+  parentRefs:
+    - name: llm-gateway
+  hostnames:
+    - REPLACED-BY-KUSTOMIZE
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /v1/}
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            # the consumer's API key stops at the gateway (Authorino has already checked it)
+            remove: [Authorization]
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - {name: x-api-version, value: "1"}
+              - {name: Deprecation, value: "@1793491200"}                    # deprecated since 2026-11-01
+              - {name: Sunset, value: "Wed, 30 Jun 2027 23:59:59 GMT"}        # switched off after this date
+              - {name: Link, value: '</v2/chat/completions>; rel="successor-version"'}
+      backendRefs:
+        - name: praxis-ai
+          port: 8084                     # Praxis listener api-v1: local models only
+      timeouts: {request: 0s, backendRequest: 0s}   # CPU models: no gateway timeout
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: llm-api-v2
+  namespace: ai-gateways
+  labels:
+    app.kubernetes.io/part-of: ai-gateways-demo
+spec:
+  parentRefs:
+    - name: llm-gateway
+  hostnames:
+    - REPLACED-BY-KUSTOMIZE
+  rules:
+    # path versioning: /v2/... -> Praxis sees the OpenAI path /v1/...
+    - matches:
+        - path: {type: PathPrefix, value: /v2/}
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: {type: ReplacePrefixMatch, replacePrefixMatch: /v1/}
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            remove: [Authorization]
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - {name: x-api-version, value: "2"}
+      backendRefs:
+        - name: praxis-ai
+          port: 8085                     # Praxis listener api-v2: aliases, OpenAI, guardrails
+      timeouts: {request: 0s, backendRequest: 0s}
+    # header versioning: same /v1/ path, "x-api-version: 2" -> v2
+    - matches:
+        - path: {type: PathPrefix, value: /v1/}
+          headers:
+            - {name: x-api-version, value: "2"}
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            remove: [Authorization]
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - {name: x-api-version, value: "2"}
+      backendRefs:
+        - name: praxis-ai
+          port: 8085
+      timeouts: {request: 0s, backendRequest: 0s}

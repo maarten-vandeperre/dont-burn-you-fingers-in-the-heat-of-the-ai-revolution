@@ -1,0 +1,51 @@
+# Persona: API owner. Who may call the models, and which tier they are on.
+#
+# Authentication: an API key, "Authorization: APIKEY <key>", matched against Secrets labelled
+# llm-gateway/consumer=true (created by `./deploy.sh ai-gateways cl-key <user> <free|gold>`).
+# The tier is an annotation on the key's Secret, so changing a consumer's tier is one
+# `oc annotate`, no redeploy.
+#
+# Authorization: free-tier keys may only call the small Gemma model; gold may call both.
+#
+# Response filter: exposes `userid` and `tier` as auth.identity.* so the TokenRateLimitPolicy
+# can count tokens per consumer and pick the limit per tier.
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: llm-models-auth
+  namespace: ai-gateways
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: llm-models
+  rules:
+    authentication:
+      api-key-consumers:
+        apiKey:
+          # Authorino compiles AuthConfigs into kuadrant-system; without this it only looks for
+          # key Secrets there (see docs/demos/10-connectivity.md, "If something goes wrong").
+          allNamespaces: true
+          selector:
+            matchLabels:
+              llm-gateway/consumer: "true"
+        credentials:
+          authorizationHeader:
+            prefix: APIKEY
+    authorization:
+      tier-may-use-model:
+        patternMatching:
+          patterns:
+            - predicate: >-
+                request.path.startsWith("/gemma-3-270m-it/") ||
+                auth.identity.metadata.annotations["llm-gateway/tier"] == "gold"
+    response:
+      success:
+        filters:
+          identity:
+            json:
+              properties:
+                userid:
+                  expression: auth.identity.metadata.name
+                tier:
+                  expression: auth.identity.metadata.annotations["llm-gateway/tier"]

@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+  - routes.yaml
+configMapGenerator:
+  - name: praxis-ai-config
+    namespace: ai-gateways
+    files:
+      - praxis-ai.yaml
+    options:
+      # fixed name: the Deployment mounts it, and `oc edit configmap praxis-ai-config` hot-reloads
+      disableNameSuffixHash: true
+      labels:
+        app.kubernetes.io/part-of: ai-gateways-demo

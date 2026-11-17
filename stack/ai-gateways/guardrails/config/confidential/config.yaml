@@ -1,0 +1,49 @@
+# NeMo Guardrails configuration "confidential": keep confidential data away from the models.
+# Called by Praxis AI (filter ai_guardrails) on POST /v1/checks, never by clients directly.
+# Both rails are deterministic: no LLM call, no model needed, so no `models:` entry.
+#
+#   block   regex_detection: company secrets that must never leave the company, in prompts
+#           (input) and in model answers (output) -> Praxis answers 403
+#   mask    sensitive_data_detection (Presidio): personal data is replaced by <ENTITY_TYPE> in
+#           the prompt before the model sees it -> Praxis forwards the masked prompt
+#
+# Same rail types as app/coffee-guardrails (demo "Guarded Coffee"), different policy.
+models: []
+
+rails:
+  config:
+    regex_detection:
+      input:
+        case_insensitive: true
+        patterns: &secrets
+          - "\\b(strictly )?confidential\\b"
+          - "\\binternal use only\\b"
+          - "\\bproject (phoenix|nightingale)\\b"               # code names of unannounced projects
+          - "\\bsk-(oai|llm|ant|proj)-[a-z0-9_-]{8,}"            # API keys (MaaS, demo, Anthropic, OpenAI)
+          - "-----begin [a-z ]*private key-----"
+          - "\\b[a-z0-9.-]+\\.corp\\.example\\.com\\b"          # internal host names
+      output:
+        case_insensitive: true
+        patterns: *secrets
+    sensitive_data_detection:
+      input:
+        entities:
+          - EMAIL_ADDRESS
+          - PHONE_NUMBER
+          - CREDIT_CARD
+          - IBAN_CODE
+      output:
+        entities:
+          - EMAIL_ADDRESS
+          - PHONE_NUMBER
+          - CREDIT_CARD
+          - IBAN_CODE
+
+  input:
+    flows:
+      - regex check input               # block: secrets in the prompt
+      - mask sensitive data on input    # mask: personal data in the prompt
+
+  output:
+    flows:
+      - regex check output              # block: secrets in the answer

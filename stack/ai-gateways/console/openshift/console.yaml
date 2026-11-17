@@ -1,0 +1,183 @@
+# AI Gateway Console (docs/demos/15-ai-gateways.md, Part F): ./deploy.sh ai-gateways console
+# builds it from stack/ai-gateways/console (binary Docker build) and deploys it here.
+#
+# The console calls llm-gateway as alice / bob (it reads their key Secrets), patches the demo
+# knobs (RateLimitPolicy, TokenRateLimitPolicy, the Praxis ConfigMap) and reads Prometheus.
+# Its Route has no login: anyone with the URL can do the same. Fine on a demo cluster; delete
+# the Route (and use oc port-forward) or put it behind an oauth-proxy elsewhere.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-gateway-console
+  namespace: ai-gateways
+  labels:
+    app: ai-gateway-console
+    app.kubernetes.io/part-of: ai-gateways-demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ai-gateway-console
+  namespace: ai-gateways
+rules:
+  # read: the objects each scenario shows ("live from the cluster")
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gateways, httproutes]
+    verbs: [get]
+  - apiGroups: [kuadrant.io]
+    resources: [authpolicies]
+    verbs: [get]
+  - apiGroups: [extensions.kuadrant.io]
+    resources: [telemetrypolicies]
+    verbs: [get]
+  - apiGroups: [monitoring.coreos.com]
+    resources: [servicemonitors]
+    verbs: [get]
+  - apiGroups: [route.openshift.io]
+    resources: [routes]
+    resourceNames: [llm-gateway, praxis-ai-limited]
+    verbs: [get]
+  # the consumer keys it calls with, and whether an OpenAI key is set (value never returned)
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [llm-key-alice, llm-key-bob, praxis-openai-key]
+    verbs: [get]
+  # the knobs: throttle, token limits, Praxis rate_limit
+  - apiGroups: [kuadrant.io]
+    resources: [ratelimitpolicies, tokenratelimitpolicies]
+    resourceNames: [llm-api-throttle, llm-api-tokens]
+    verbs: [get, patch]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [praxis-ai-config]
+    verbs: [get, patch]
+  # annotate the Praxis pod so the kubelet syncs the ConfigMap volume right away
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ai-gateway-console
+  namespace: ai-gateways
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ai-gateway-console
+subjects:
+  - kind: ServiceAccount
+    name: ai-gateway-console
+    namespace: ai-gateways
+---
+# Metrics page: Thanos querier across namespaces (Limitador lives in kuadrant-system).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ai-gateway-console-monitoring-view
+  labels:
+    app.kubernetes.io/part-of: ai-gateways-demo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+  - kind: ServiceAccount
+    name: ai-gateway-console
+    namespace: ai-gateways
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ai-gateway-console
+  namespace: ai-gateways
+  labels:
+    app: ai-gateway-console
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ai-gateway-console
+  namespace: ai-gateways
+  labels:
+    app: ai-gateway-console
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ai-gateway-console:latest
+  resources:
+    limits:
+      memory: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-gateway-console
+  namespace: ai-gateways
+  labels:
+    app: ai-gateway-console
+    app.kubernetes.io/part-of: ai-gateways-demo
+  annotations:
+    # roll out every new build
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"ai-gateway-console:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"console\")].image"}]'
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-gateway-console
+  template:
+    metadata:
+      labels:
+        app: ai-gateway-console
+        app.kubernetes.io/part-of: ai-gateways-demo
+    spec:
+      serviceAccountName: ai-gateway-console
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: console
+          image: image-registry.openshift-image-registry.svc:5000/ai-gateways/ai-gateway-console:latest
+          env:
+            - {name: NAMESPACE, value: ai-gateways}
+            - {name: CONSUMERS, value: "alice,bob"}
+          ports:
+            - {name: http, containerPort: 8080}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-gateway-console
+  namespace: ai-gateways
+spec:
+  selector:
+    app: ai-gateway-console
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ai-gateway-console
+  namespace: ai-gateways
+  annotations:
+    haproxy.router.openshift.io/timeout: 200s    # bursts + CPU models
+spec:
+  to: {kind: Service, name: ai-gateway-console}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}

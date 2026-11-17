@@ -1,0 +1,125 @@
+# Part F, persona: platform engineer / API owner. Four policies on the Gateway itself: they are
+# the defaults for every route on llm-gateway (llm-api-v1, llm-api-v2). A route with its own
+# policy of the same kind replaces the default for that route: llm-models (Part B) keeps its own
+# AuthPolicy and TokenRateLimitPolicy, and only inherits the request throttle.
+#
+#   AuthPolicy          who is calling (API key Secret), passed on to Praxis as two headers
+#   RateLimitPolicy     throttle: 5 requests per second per consumer
+#   TokenRateLimitPolicy  tokens per minute per consumer, by tier
+#   TelemetryPolicy     user + tier labels on the Limitador metrics (who used how many tokens)
+apiVersion: kuadrant.io/v1
+kind: AuthPolicy
+metadata:
+  name: llm-api-auth
+  namespace: ai-gateways
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: llm-gateway
+  rules:
+    authentication:
+      api-key-consumers:                 # the same consumer keys as Part B
+        apiKey:
+          allNamespaces: true
+          selector:
+            matchLabels:
+              llm-gateway/consumer: "true"
+        credentials:
+          authorizationHeader:
+            prefix: APIKEY
+    response:
+      success:
+        # Injected into the request towards Praxis, overwriting whatever the client sent:
+        # Praxis routes on them (only gold may use OpenAI) and logs them (access_log).
+        headers:
+          x-consumer:
+            plain:
+              expression: auth.identity.metadata.name
+          x-consumer-tier:
+            plain:
+              expression: auth.identity.metadata.annotations["llm-gateway/tier"]
+        # auth.identity.userid / .tier for the rate limits and the metrics labels below
+        filters:
+          identity:
+            json:
+              properties:
+                userid:
+                  expression: auth.identity.metadata.name
+                tier:
+                  expression: auth.identity.metadata.annotations["llm-gateway/tier"]
+---
+# "Throttle the API: max 5 requests per second", per consumer. Change it live:
+#   oc patch ratelimitpolicy llm-api-throttle -n ai-gateways --type=merge \
+#     -p '{"spec":{"limits":{"per-consumer":{"rates":[{"limit":2,"window":"1s"}]}}}}'
+apiVersion: kuadrant.io/v1
+kind: RateLimitPolicy
+metadata:
+  name: llm-api-throttle
+  namespace: ai-gateways
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: llm-gateway
+  limits:
+    per-consumer:
+      rates:
+        - limit: 5
+          window: 1s
+      counters:
+        - expression: auth.identity.userid   # alice and bob each get their own 5/s
+---
+# Token quotas: the wasm shim reads usage.total_tokens from every answer (local model or OpenAI)
+# and charges it to the consumer. Over the limit -> the NEXT request gets 429.
+apiVersion: kuadrant.io/v1alpha1
+kind: TokenRateLimitPolicy
+metadata:
+  name: llm-api-tokens
+  namespace: ai-gateways
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: llm-gateway
+  limits:
+    api-free:
+      rates:
+        - limit: 500                     # tokens per minute, per consumer
+          window: 1m
+      when:
+        - predicate: auth.identity.tier == "free"
+        - predicate: '!request.path.endsWith("/models")'   # the catalog has no usage block
+      counters:
+        - expression: auth.identity.userid
+    api-gold:
+      rates:
+        - limit: 20000
+          window: 1m
+      when:
+        - predicate: auth.identity.tier == "gold"
+        - predicate: '!request.path.endsWith("/models")'
+      counters:
+        - expression: auth.identity.userid
+---
+# Metrics per consumer: Limitador's authorized_hits (tokens / requests charged),
+# authorized_calls and limited_calls get the labels user and tier, next to
+# limitador_namespace="ai-gateways/<route>" (which API version). Scraped by the
+# kuadrant-limitador-monitor PodMonitor (Kuadrant spec.observability.enable: true).
+apiVersion: extensions.kuadrant.io/v1alpha1
+kind: TelemetryPolicy
+metadata:
+  name: llm-gateway-telemetry
+  namespace: ai-gateways
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: llm-gateway
+  metrics:
+    default:
+      labels:
+        user: auth.identity.userid
+        tier: auth.identity.tier
+        # not the model: the wasm shim can't read the request body (requestBodyJSON breaks
+        # the rate limit call). Tokens per model come from Praxis (praxis_ai_*_tokens_total).

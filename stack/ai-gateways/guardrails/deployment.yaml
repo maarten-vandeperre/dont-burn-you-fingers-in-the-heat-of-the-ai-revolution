@@ -1,0 +1,87 @@
+# NeMo Guardrails server: the TrustyAI build (quay.io/trustyai/nemo-guardrails-server, NeMo
+# 0.24 with /v1/checks, Presidio and the spaCy model included), as a plain Deployment.
+# On a cluster with the TrustyAI component Managed in the DataScienceCluster, the same ConfigMap
+# can be served by a NemoGuardrails CR instead (see app/coffee-guardrails/openshift/).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nemo-guardrails
+  namespace: ai-gateways
+  labels:
+    app: nemo-guardrails
+    app.kubernetes.io/part-of: ai-gateways-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nemo-guardrails
+  template:
+    metadata:
+      labels:
+        app: nemo-guardrails
+        app.kubernetes.io/part-of: ai-gateways-demo
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: nemo-guardrails
+          image: quay.io/trustyai/nemo-guardrails-server:latest
+          env:
+            - name: CONFIG_ID          # /app/config/<CONFIG_ID> is the default configuration
+              value: confidential
+            - name: PORT
+              value: "8000"
+            - name: HOME               # random UID under restricted-v2: writable caches
+              value: /tmp
+          ports:
+            - {name: http, containerPort: 8000}
+          readinessProbe:
+            tcpSocket: {port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 200m, memory: 1Gi}      # Presidio + spaCy en_core_web_lg
+            limits: {cpu: "2", memory: 3Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - {name: confidential, mountPath: /app/config/confidential, readOnly: true}
+      volumes:
+        - name: confidential
+          configMap:
+            name: nemo-config-confidential
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nemo-guardrails
+  namespace: ai-gateways
+spec:
+  selector:
+    app: nemo-guardrails
+  ports:
+    - {name: http, port: 8000, targetPort: http}
+---
+# NeMo speaks plain HTTP inside the namespace, and Praxis calls it as a private upstream
+# (insecure_options.allow_private_upstreams). So only Praxis may reach it: no clients, no Route.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nemo-guardrails-from-praxis-only
+  namespace: ai-gateways
+spec:
+  podSelector:
+    matchLabels:
+      app: nemo-guardrails
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: praxis-ai
+      ports:
+        - {protocol: TCP, port: 8000}

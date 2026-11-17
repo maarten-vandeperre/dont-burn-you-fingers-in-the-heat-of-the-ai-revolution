@@ -1,0 +1,40 @@
+# Persona: platform engineer. A plain Gateway API Gateway, same GatewayClass as the MaaS gateway
+# (openshift-default, the Istio that ships inside OpenShift's ingress operator), but in our own
+# namespace and with nothing OpenShift AI generated on it. Everything this gateway knows about
+# LLMs comes from the Connectivity Link policies next to it.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: llm-gateway
+  namespace: ai-gateways
+  annotations:
+    networking.istio.io/service-type: ClusterIP   # exposed through route.yaml, no LoadBalancer
+spec:
+  gatewayClassName: openshift-default
+  listeners:
+    - name: http
+      hostname: REPLACED-BY-KUSTOMIZE
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+# llm-gateway.<apps-domain> -> OpenShift router (edge TLS) -> the Gateway's Envoy.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: llm-gateway
+  namespace: ai-gateways
+  annotations:
+    haproxy.router.openshift.io/timeout: 180s
+spec:
+  host: REPLACED-BY-KUSTOMIZE
+  to:
+    kind: Service
+    name: llm-gateway-openshift-default   # Service created for the Gateway: "<name>-<class>"
+  port:
+    targetPort: 80
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

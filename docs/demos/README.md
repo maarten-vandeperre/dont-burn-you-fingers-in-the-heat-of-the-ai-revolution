@@ -19,6 +19,7 @@ demo takes 5 to 10 minutes and works on its own; all of them use the same runnin
 | [10. Connectivity](10-connectivity.md) | Red Hat Service Interconnect (legacy database, no VPN), Service Mesh (pointer to demo 2), Red Hat Connectivity Link (partner API, Dev Portal personas, self-service signup/approval, plan-tiered rate limits) |
 | [13. Intelligent assistant](13-developer-lightspeed.md) | The Developer Hub intelligent assistant (formerly Developer Lightspeed) on the platform's own Qwen model (MaaS tenant), MCP tools: deployed OpenShift AI models, catalog overview and relations, linked components and CI/CD/runtime status per component |
 | [14. Developer Hub 2.1, agent-ready](14-developer-hub-2.1.md) | The Developer Hub 2.1 release: AI Catalog fed by OpenShift AI (models, model cards, MCP servers, skills, rules, agents), MCP tools from plugins (Kubernetes, Scorecard), the agent-friendly CLI, and the LLM application template with a model picker, TechDocs and Argo CD |
+| [15. AI gateways compared](15-ai-gateways.md) | Praxis AI, Red Hat Connectivity Link and OpenShift AI MaaS in front of the same two models: body-based routing and Anthropic ⇄ OpenAI translation (Praxis), API keys, per-tier authorization and token quotas as policies (Connectivity Link), the MaaS CRDs and the Connectivity Link policies they generate, Praxis in front of MaaS for Anthropic clients, Praxis + NeMo Guardrails blocking confidential data and masking personal data, and Connectivity Link + Praxis as one LLM API with a web console (throttling, token limits, API versioning, model routing and aliases, local model vs OpenAI, OpenAI guardrails for coffee / lemons / email addresses, metrics per consumer and model). All configuration as YAML |
 | [Guarded Coffee](../../app/coffee-guardrails/DEMO.md) | NeMo Guardrails (TrustyAI) on the laptop: coffee only, 200 character limits, PII masking, no cappuccino after noon; same config on OpenShift AI |
 | [Camel on the laptop](../../app/camel-ai-demo/README.md) | Local Camel demo: one API for Qwen (Podman AI Lab), OpenAI and Anthropic, files, live routes, Kaoto and Hawtio |
 | [7. Platform Coffee](07-coffee-shop.md) | One app, every capability: AI ordering, menu releases and chaos in the mesh, CDC audit trail |
@@ -44,6 +45,7 @@ export OPENAI_API_KEY=sk-...           # optional, enables "openai" and the fall
 ./deploy.sh connectivity setup         # only for demo 10 (Service Interconnect, Connectivity Link)
 ./deploy.sh connectivity legacy && ./deploy.sh connectivity link && ./deploy.sh connectivity partner-api deploy
 ./deploy.sh lightspeed setup           # only for demo 13 (Developer Lightspeed + MCP tools)
+./deploy.sh ai-gateways deploy         # only for demo 15 (Praxis AI + Connectivity Link LLM gateway + console)
 ./deploy.sh urls; ./deploy.sh app urls # all URLs
 ```
 
