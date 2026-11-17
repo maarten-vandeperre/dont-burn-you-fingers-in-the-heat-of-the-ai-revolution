@@ -217,6 +217,20 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
   curl -skN $P/v1/messages -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
     -d '{"model":"gemma-3-270m-it","max_tokens":10,"stream":true,"messages":[{"role":"user","content":"hello"}]}' | grep '^event' | uniq -c
   ```
+* **What happens:** same `direct` listener as A1, but now the path is `/v1/messages` (Anthropic).
+  1. `classify`: `anthropic_messages_request` (condition `path: /v1/messages`) parses the Anthropic
+     body; `model_to_header` sets `X-Model` from its `model` field, exactly as in A1.
+  2. `translate`: `anthropic_messages_to_chat_completions` rewrites the body to OpenAI Chat
+     (`system` → a system message, content blocks → plain messages, `max_tokens`, `stream`);
+     `path_rewrite` turns `/v1/messages` into `/v1/chat/completions`. It also drops the client's
+     `x-api-key` / `Authorization` (an Anthropic credential must never reach an OpenAI backend).
+  3. `models`: routed on `X-Model` like A1; vLLM answers in OpenAI format.
+  4. On the way back the same filter turns the OpenAI answer into an Anthropic `message`
+     (`id: msg_chatcmpl-…`, `stop_reason`, `usage.input_tokens/output_tokens`). With `"stream": true`
+     the answer is `text/event-stream`, so `anthropic_messages_to_chat_completions_stream` (its
+     `response_conditions` match that content type) converts every OpenAI SSE chunk into Anthropic
+     events: `message_start`, `content_block_delta`…, `message_stop`.
+  Config: chains `classify` and `translate` in [`praxis-ai.yaml`](../../stack/ai-gateways/praxis/praxis-ai.yaml).
 * **You see:** an Anthropic-format reply (`"type":"message"`, `"id":"msg_chatcmpl-…"`), and a
   streamed Anthropic event sequence: `message_start`, `content_block_delta` ×N, `message_stop`.
 * **Say:** "vLLM speaks OpenAI Chat. Praxis translates the request, the path and the response,
@@ -228,6 +242,17 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
   ```promql
   sum by (model) (rate(praxis_ai_output_tokens_total{namespace="ai-gateways"}[5m]))
   ```
+* **What happens:** nothing new is sent; you read what A1 and A2 left behind. In the `models` chain,
+  response filters run in reverse order, so `token_count` (`provider: openai`) reads the OpenAI
+  `usage` block of every answer *before* A2's translation rewrites it, and adds it to
+  `praxis_ai_prompt_tokens_total` / `praxis_ai_output_tokens_total{model, cluster}`.
+  `time_to_first_token` measures the time until the first response byte (`praxis_ai_ttft_seconds`).
+  For streams there's normally no `usage` at all; `stream_usage_inject` adds
+  `stream_options.include_usage: true` to every streaming request, so vLLM sends a final chunk with
+  usage that `token_count` can read. Praxis exposes all of it on `:9902/metrics`; the
+  `ServiceMonitor praxis-ai` ([`deployment.yaml`](../../stack/ai-gateways/praxis/deployment.yaml))
+  makes OpenShift's user-workload Prometheus scrape it every 15 s, and `./deploy.sh ai-gateways
+  metrics` reads the endpoint directly with `oc exec`.
 * **You see:** `praxis_ai_prompt_tokens_total`, `praxis_ai_output_tokens_total` and
   `praxis_ai_ttft_seconds` labelled by `model` and `cluster`.
 * **Say:** "Token accounting from the gateway, not from the model server. `stream_usage_inject`
@@ -235,6 +260,14 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
 
 **A4. A rate limit, and what it doesn't know.**
 * **Do:** `./deploy.sh ai-gateways burst` (first half).
+* **What happens:** `burst` fires 20 `GET /v1/models` at once at Route `praxis-ai-limited`, which
+  points at the `limited` listener (`:8081`, chains `observability, throttle, catalog-v1, …`).
+  `throttle` is a `rate_limit` filter in `mode: global`: one token bucket for the whole listener,
+  holding at most `burst: 5` tokens and refilled with `rate: 5` per second. Each request takes a
+  token; with the bucket empty Praxis answers **429** immediately. The 5 that got a token reach
+  `catalog-v1`, a `static_response` that answers `/v1/models` with a fixed JSON list: no model is
+  called, so the burst costs nothing. `rate_limit` is a security filter (no conditions allowed),
+  which is why the limited variant is a separate listener instead of a condition on `direct`.
 * **You see:** of 20 parallel requests, 5 pass (200: Praxis answers `/v1/models` itself) and 15 get **429**.
 * **Say:** "That's a token bucket on requests, the same for everybody. Praxis has no idea who is
   calling, so it can't give alice and bob different limits. That's where Connectivity Link comes in."
@@ -242,6 +275,13 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
 **A5. Hot reload.** (optional)
 * **Do:** `oc edit configmap praxis-ai-config -n ai-gateways`, change `rate: 5` to `rate: 50`, then
   `oc logs deploy/praxis-ai -n ai-gateways | grep 'reload complete'` and repeat the burst.
+* **What happens:** the ConfigMap is mounted as a *directory* (no `subPath`) at `/etc/praxis`, so
+  the kubelet replaces the file in the running pod when the ConfigMap changes (on its next sync, up
+  to about a minute). Praxis watches the file, parses and validates the new config, builds new
+  pipelines and swaps them in per listener (`config reload complete swapped=[…]` in the log).
+  Requests in flight finish on the old pipeline; stateful filters such as the rate-limit bucket
+  start empty. If the new file is invalid, the reload is refused (`config reload failed`) and the
+  old config keeps serving.
 * **Say:** "No restart: routes, clusters, filters and limits are swapped live, and an invalid config
   is rejected while the old one keeps serving."
 
@@ -255,6 +295,15 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
   ```bash
   curl -sk -o /dev/null -w '%{http_code}\n' $G/gemma-3-270m-it/v1/chat/completions -d '{}'      # 401
   ```
+* **What happens:** `$G` is Route `llm-gateway` (edge TLS at the OpenShift router) → Service
+  `llm-gateway-openshift-default` → the Envoy pod that the `openshift-default` GatewayClass (the
+  Istio inside OpenShift's ingress operator) created for `Gateway llm-gateway`. The Kuadrant
+  operator turned the policies on the route into a wasm filter config in that Envoy (EnvoyFilter
+  `kuadrant-llm-gateway`). Envoy matches the path `/gemma-3-270m-it/v1/` to a rule of
+  `HTTPRoute llm-models`; for that rule the wasm filter first asks Authorino (the AuthPolicy). There
+  is no `Authorization: APIKEY …` header, so Authorino says no and Envoy answers **401**: the model
+  is never contacted. Config: [`gateway.yaml`](../../stack/ai-gateways/connectivity-link/gateway.yaml),
+  [`httproute.yaml`](../../stack/ai-gateways/connectivity-link/httproute.yaml).
 * **You see:** one path prefix per model (`/qwen3-0-6b/v1/…`, `/gemma-3-270m-it/v1/…`), and
   **401** without a key.
 * **Say:** "Same GatewayClass as MaaS, `openshift-default`, but nothing OpenShift AI generated.
@@ -270,12 +319,38 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
   cl $KEY_ALICE qwen3-0-6b          # 403: free tier
   cl $KEY_BOB   qwen3-0-6b          # 200: gold tier
   ```
+* **What happens**, for `cl $KEY_ALICE qwen3-0-6b`:
+  1. Envoy matches the rule for `/qwen3-0-6b/v1/` in `HTTPRoute llm-models`; the wasm filter sends
+     the request's headers to Authorino.
+  2. Authorino runs `AuthPolicy llm-models-auth`: **authentication** looks for a Secret labelled
+     `llm-gateway/consumer=true` whose `api_key` equals the value after `APIKEY `. That Secret
+     (`llm-key-alice`) becomes `auth.identity`.
+  3. **authorization**: the CEL rule `request.path.startsWith("/gemma-3-270m-it/") ||
+     auth.identity.metadata.annotations["llm-gateway/tier"] == "gold"` is false for alice on Qwen →
+     **403**. For alice on Gemma, or bob anywhere, it's true.
+  4. On success, `response.success.filters.identity` publishes `auth.identity.userid` (the Secret
+     name) and `auth.identity.tier` (the annotation) for the token limits (B3).
+  5. Envoy applies the route: `URLRewrite` turns `/qwen3-0-6b/v1/chat/completions` into
+     `/v1/chat/completions` and sends it to `qwen3-0-6b-kserve-workload-svc` in `maas-models`
+     (allowed by the `ReferenceGrant` there), over TLS (KServe's DestinationRule).
+  Config: [`auth-policy.yaml`](../../stack/ai-gateways/connectivity-link/auth-policy.yaml),
+  [`httproute.yaml`](../../stack/ai-gateways/connectivity-link/httproute.yaml); the key Secret is
+  made by `key()` in `ai-gateways.sh`.
 * **Say:** "The key is a Kubernetes Secret, the tier is an annotation on it. The `AuthPolicy`
   validates the key with Authorino and runs a CEL rule: free may only call Gemma. Moving alice to
   gold is `./deploy.sh ai-gateways key alice gold`, no redeploy."
 
 **B3. Token quotas per consumer.**
 * **Do:** `./deploy.sh ai-gateways burst` (second half), then `cl $KEY_BOB gemma-3-270m-it`.
+* **What happens:** `TokenRateLimitPolicy llm-models-tokens` adds two steps around every request:
+  1. **Before** forwarding, the wasm filter asks Limitador "may `llm-key-alice` (limit `free`,
+     because `auth.identity.tier == "free"`) spend 0 more tokens?". Limitador keeps one counter per
+     route, limit and `auth.identity.userid`, over a 1-minute window. Under 300 → go on; over → **429**.
+  2. **After** the answer, the wasm filter reads `usage.total_tokens` from the response body and
+     reports that number to Limitador, which adds it to alice's counter.
+  That's why the request that crosses 300 still succeeds and the *next* one is refused, and why
+  bob's counter (limit `gold`, 20 000) is unaffected. Config:
+  [`token-rate-limit-policy.yaml`](../../stack/ai-gateways/connectivity-link/token-rate-limit-policy.yaml).
 * **You see:** alice gets 200 three or four times (about 95 tokens each), then **429**; bob still gets 200.
 * **Say:** "This isn't counting requests. The wasm filter in Envoy reads `usage.total_tokens` from
   every model response and charges it to alice's counter in Limitador. Her next request after the
@@ -287,6 +362,12 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
   oc get authpolicy,tokenratelimitpolicy -n ai-gateways
   oc get httproute llm-models -n ai-gateways -o jsonpath='{range .status.parents[0].conditions[*]}{.type}={.status}{"\n"}{end}'
   ```
+* **What happens:** the Kuadrant operator watches the policies and turns each into data-plane config:
+  the `AuthPolicy` becomes an Authorino `AuthConfig` (in `kuadrant-system`), the
+  `TokenRateLimitPolicy` becomes limits in the `Limitador` CR, and both become entries in the wasm
+  config of the gateway's Envoy (EnvoyFilter `kuadrant-llm-gateway`). It reports back on the
+  policies (`Accepted`, `Enforced`) and on the HTTPRoute they target (`…PolicyAffected`). That's all
+  `oc get` shows: no separate API-management server holds this state.
 * **You see:** both policies `Enforced`, and the HTTPRoute status listing
   `kuadrant.io/AuthPolicyAffected` and `kuadrant.io/TokenRateLimitPolicyAffected`.
 * **Say:** "Platform engineering owns the Gateway, the API owner owns the route and its policies.
@@ -304,6 +385,14 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
   chat $M/maas-models/qwen3-0-6b qwen3-0-6b -H "Authorization: Bearer $MAAS_KEY" | jq -r '.choices[0].message.content'
   chat $M qwen3-0-6b -H "Authorization: Bearer $MAAS_KEY" -o /dev/null -w '%{http_code}\n'   # 404
   ```
+* **What happens:** `$M` is the MaaS gateway (`maas-default-gateway` in `openshift-ingress`, the same
+  GatewayClass as Part B). `/v1/models` is answered by `maas-api`: it looks up which models the
+  key's subscription covers and returns them with their URLs. A chat call goes to
+  `/maas-models/<model>/v1/chat/completions`: an HTTPRoute that OpenShift AI created for the
+  `LLMInferenceService`, with an `AuthPolicy` and `TokenRateLimitPolicy` that the MaaS controller
+  generated (C2). The AuthPolicy validates the `sk-oai-…` key against `maas-api` and selects the
+  subscription; the token limit is charged per user and subscription, as in B3. `$M/v1/chat/completions`
+  without the model path matches no route → **404**: MaaS on 3.4 routes on the path, not on the body.
 * **You see:** the models this key may use, each with its own base URL
   (`https://maas.<domain>/maas-models/<model>`), an answer on that URL, and a 404 on the shared
   `/v1/chat/completions`.
@@ -318,6 +407,12 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
   oc get authpolicy,tokenratelimitpolicy -n maas-models
   oc get tokenratelimitpolicy maas-trlp-qwen3-0-6b -n maas-models -o yaml | sed -n '/^spec/,/^status/p'
   ```
+* **What happens:** you declare three model-centric objects: `MaaSModelRef` (publish this
+  `LLMInferenceService` to MaaS), `MaaSAuthPolicy` (which groups may use which models) and
+  `MaaSSubscription` (token limits per model for a group, with a priority). The MaaS controller
+  reconciles them into one `AuthPolicy` (`maas-auth-<model>`) and one `TokenRateLimitPolicy`
+  (`maas-trlp-<model>`) per model, attached to the model's HTTPRoute. From there Kuadrant does
+  exactly what it did in B4 with the policies you wrote by hand.
 * **You see:** a generated `AuthPolicy` and `TokenRateLimitPolicy` per model. They are the same
   kinds as `llm-models-auth` and `llm-models-tokens` from Part B, with one limit per subscription
   (`small-models-free`: 5000 tokens/min, `small-models-premium`: 100 000, `developer-lightspeed`).
@@ -326,6 +421,11 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
 
 **C3. Same models, three gateways, one table.**
 * **Do:** `./deploy.sh ai-gateways compare` (and `compare gemma-3-270m-it`).
+* **What happens:** `compare` (in `ai-gateways.sh`) sends one identical chat body to each gateway,
+  with that gateway's URL shape and credential: `$P/v1/chat/completions` (no key), `$G/<model>/v1/…`
+  (bob's `APIKEY`), `$M/maas-models/<model>/v1/…` (a fresh 1-hour MaaS key, minted through
+  `/maas-api/v1/api-keys` with your `oc` token), and Praxis → MaaS through a port-forward (OpenAI
+  and Anthropic API). Per row it prints the HTTP status, curl's total time and the `usage` block.
 * **You see:** a row each for Praxis, Connectivity Link, MaaS and Praxis→MaaS (OpenAI and
   Anthropic API): same model, comparable token usage and latency (the model dominates; every gateway
   adds milliseconds). A row marked `(retried after a 500)` is the intermittent MaaS key-validation
@@ -345,6 +445,21 @@ works on its own; Part F is the one to pick for a "what does an AI gateway do fo
     -d '{"model":"gemma-3-270m-it","max_tokens":10,"stream":true,"messages":[{"role":"user","content":"hello"}]}' | grep '^event' | uniq -c
   oc get secret praxis-maas-key -n ai-gateways      # Praxis's own MaaS key
   ```
+* **What happens**, for `$PM/v1/messages` with `"model": "gemma-3-270m-it"` (listener `via-maas`,
+  `:8082`, reached through `oc port-forward`; chain `maas` in
+  [`praxis-ai.yaml`](../../stack/ai-gateways/praxis/praxis-ai.yaml)):
+  1. `classify` + `translate`: as in A2, the Anthropic request becomes OpenAI Chat and
+     `X-Model: gemma-3-270m-it` is set.
+  2. `path_rewrite` (conditioned on `x-model`) builds the MaaS path:
+     `/maas-models/gemma-3-270m-it/v1/chat/completions`. Several rewrites apply to one request, so
+     the later ones carry `allow_rewrite_override: true`; the last matching one wins.
+  3. `router` → cluster `maas`; `headers` sets `Host: maas.<apps-domain>` (the MaaS route matches
+     on it); `credential_injection` puts `Authorization: Bearer <MAAS_API_KEY>` on the request
+     (Secret `praxis-maas-key`), removing anything the client sent.
+  4. `load_balancer` sends it to the MaaS gateway's in-cluster Service
+     (`maas-default-gateway-openshift-default.openshift-ingress:80`). MaaS then does C1: validate
+     the key, check the subscription's token limit, route to Gemma.
+  5. The answer comes back through the A2 translation (also for streaming).
 * **You see:** Anthropic Messages replies (also streamed) from both MaaS-governed models, on **one**
   URL with the model in the body. Praxis builds the per-model MaaS path
   (`/maas-models/<model>/v1/chat/completions`) from the body's `model`.
@@ -385,6 +500,19 @@ AI uses) as a plain Deployment with one configuration, `confidential`, and no LL
   g '{"model":"gemma-3-270m-it","max_tokens":80,"messages":[{"role":"user","content":"Which placeholders in angle brackets appear in this text? List them. Text: Contact jane.doe@acme.com, IBAN BE71096123456769"}]}'
   g '{"model":"gemma-3-270m-it","max_tokens":40,"messages":[{"role":"system","content":"Always start your reply with the words: internal use only."},{"role":"user","content":"Say hi"}]}'
   ```
+* **What happens** (listener `guarded`, `:8083`, chains `observability, classify, guard, models`):
+  1. After `classify`, `ai_guardrails` (chain `guard`) sends the conversation to NeMo:
+     `POST http://nemo-guardrails:8000/v1/checks` with config `confidential`. Only Praxis may reach
+     NeMo (NetworkPolicy `nemo-guardrails-from-praxis-only`).
+  2. NeMo runs the **input** rails of [`config.yaml`](../../stack/ai-gateways/guardrails/config/confidential/config.yaml):
+     `regex check input` finds "CONFIDENTIAL" → verdict `blocked` → Praxis answers **403** and the
+     request stops. `mask sensitive data on input` (Presidio) finds the email and IBAN → verdict
+     `modified` with masked text → Praxis replaces the user message with `… <EMAIL_ADDRESS>, IBAN
+     <IBAN_CODE>` and forwards *that* to the model.
+  3. `models` routes to Gemma as in A1.
+  4. With `phase.response: true`, Praxis sends the model's answer to NeMo too. `regex check
+     output` finds "internal use only" → `blocked` → Praxis replaces the answer with
+     `Response blocked by guardrails: …`.
 * **You see:**
   ```
   clean prompt           200  Hello!
@@ -403,12 +531,19 @@ AI uses) as a plain Deployment with one configuration, `confidential`, and no LL
 * **Do:** add a code name to `stack/ai-gateways/guardrails/config/confidential/config.yaml`
   (`patterns:`), then
   `oc apply -k stack/ai-gateways/guardrails && oc rollout restart deploy/nemo-guardrails -n ai-gateways`.
+* **What happens:** `kustomization.yaml` in `stack/ai-gateways/guardrails` generates ConfigMap
+  `nemo-config-confidential` from `config.yaml`; the Deployment mounts it at
+  `/app/config/confidential`. NeMo reads its configs when it starts, hence the rollout restart.
+  Praxis isn't touched: it only knows the endpoint and the config id `confidential`.
 * **Say:** "The policy is a ConfigMap owned by security, the enforcement point is the gateway owned
   by the platform team, and the application teams change nothing."
 
 **E3. Fail closed, and the limits.**
 * **Do:** `oc scale deploy/nemo-guardrails -n ai-gateways --replicas=0`, send a prompt to `$PG`
   (**500**: no unscreened traffic), then scale back to 1.
+* **What happens:** with no NeMo pod, the `/v1/checks` callout fails (connection refused or the
+  15 s `timeout_ms`). `ai_guardrails` fails closed by default, so Praxis answers **500** instead of
+  forwarding an unscreened prompt.
 * **Say:** "`ai_guardrails` is a security filter: no conditions, fail closed by default. Today it
   screens OpenAI Chat without streaming (streaming plus response screening returns 422 until Praxis
   screens SSE), and masking rewrites Chat bodies only, which is why the guarded listener has no
@@ -483,6 +618,20 @@ two headers the Connectivity Link `AuthPolicy` writes on every request (`x-consu
 
 **F1. Model routing.** Console: *Model routing*, **Send to all**.
 * **Do:** `ask /v2/chat/completions $KEY_BOB smart "hi"`, then the same with `fast`, `gemma-3-270m-it`, `gpt-5`.
+* **What happens**, for `ask /v2/chat/completions $KEY_BOB smart "hi"`:
+  1. **Connectivity Link** (Envoy of `llm-gateway`): `/v2/` matches `HTTPRoute llm-api-v2`. The
+     Gateway-level `AuthPolicy llm-api-auth` validates bob's key and adds `x-consumer: llm-key-bob`
+     and `x-consumer-tier: gold` to the request; `RateLimitPolicy` and `TokenRateLimitPolicy` check
+     bob's counters in Limitador. The route rewrites `/v2/` to `/v1/`, removes `Authorization` and
+     forwards to Service `praxis-ai`, port 8085.
+  2. **Praxis**, listener `api-v2`: `data-classification` does nothing (no header); `classify` sets
+     `X-Model: smart`; `catalog-v2` only answers `/v1/models`; `unknown-model-v2` lets `smart`
+     through (it's in the list); `tier-gate` only cares about OpenAI models.
+  3. `model_to_provider` finds `smart` → upstream `qwen`, `target_model: qwen3-0-6b`: it rewrites
+     `"model"` in the body to `qwen3-0-6b` and selects cluster `qwen`; `load_balancer` sends it to
+     the Qwen workload (TLS, service CA). Unlike A1, the client name and the served name can differ.
+  4. On the way back: `token_count` records the tokens under `model="smart"`; Connectivity Link
+     charges `usage.total_tokens` to bob and adds `x-api-version: 2` to the response.
 * **You see:** one URL, seven model names. `smart` is answered by `qwen3-0-6b`, `fast` by
   `gemma-3-270m-it`, `cloud` / `gpt-4o-mini` go to OpenAI, `gpt-5` is a 404 with a readable error.
 * **Say:** "Clients ask for a capability, the platform decides which model that is today. Swap the
@@ -520,6 +669,15 @@ two headers the Connectivity Link `AuthPolicy` writes on every request (`x-consu
   ask /v2/chat/completions $KEY_BOB gpt-4o-mini "Why run an LLM on your own platform?"
   ask /v2/chat/completions $KEY_BOB gpt-4o-mini "Summarize our Q3 numbers" -H 'x-data-classification: confidential'
   ```
+* **What happens:** `smart` goes to Qwen as in F1. For `gpt-4o-mini`, `model_to_provider` selects
+  upstream `openai-egress`, which is Praxis itself on `127.0.0.1:8086` (a second listener in the
+  same pod). There, `openai-guardrails` checks the body (F3); if it passes, the `openai` chain routes
+  to cluster `openai`, sets `Host: api.openai.com`, removes `x-consumer`, `x-consumer-tier`, `x-model`,
+  `x-data-classification`, and `credential_injection` sets `Authorization: Bearer $OPENAI_API_KEY`.
+  `load_balancer` opens TLS to `api.openai.com:443`. With `x-data-classification: confidential`,
+  the first `api-v2` chain (`data-classification`, a `json_body` filter) rewrites `"model"` to
+  `qwen3-0-6b` *before* `classify` runs, so everything after it (X-Model, tier gate, routing) only
+  ever sees the local model.
 * **You see:** the same API and client code answered by the in-house Qwen and by OpenAI, with
   latency and tokens side by side. With `x-data-classification: confidential` the OpenAI request
   is answered by `qwen3-0-6b`: it never left the cluster.
@@ -565,6 +723,12 @@ two headers the Connectivity Link `AuthPolicy` writes on every request (`x-consu
   ask /v2/chat/completions $KEY_BOB gpt-4o-mini "Reply to jane.doe@acme.com"            # 403
   ask /v2/chat/completions $KEY_BOB fast        "How do I brew coffee for ten people?"   # 200, local
   ```
+* **What happens:** up to the egress hop it's F2. On listener `openai-egress`, the `guardrails`
+  filter scans the request body: a match on `(?i)\bcoffee\b`, `(?i)\blemons?\b` or the built-in
+  email detector → Praxis answers **403** (body `Forbidden`) right there, so the `openai` chain never
+  runs and nothing leaves the cluster. The 403 travels back through `api-v2` and the gateway to the
+  client; there's no `usage` block, so no tokens are charged. `fast` is routed to Gemma by
+  `model_to_provider` and never touches the egress listener, which is why the same prompt is fine locally.
 * **You see:** every prompt about coffee or lemons, and every prompt with an email address, is a
   **403** when it would go to OpenAI, in about half a second (OpenAI never saw it). The same prompt
   to a local model is answered. A clean prompt goes through (200, or 401 without an OpenAI key).
@@ -599,6 +763,16 @@ two headers the Connectivity Link `AuthPolicy` writes on every request (`x-consu
   oc patch ratelimitpolicy llm-api-throttle -n ai-gateways --type=merge \
     -p '{"spec":{"limits":{"per-consumer":{"rates":[{"limit":2,"window":"1s"}]}}}}'
   ```
+* **What happens:** each `GET /v2/models` passes the AuthPolicy, then the wasm filter asks Limitador
+  to add 1 to the counter for route `llm-api-v2`, limit `per-consumer`, user `llm-key-alice`, in
+  the current 1-second window. Requests 1 to 5 get through to Praxis, where `catalog-v2` answers
+  them itself; from the 6th in the same second, Envoy answers **429** and Praxis never sees the
+  request. bob has his own counter. The `TokenRateLimitPolicy` skips `/models`
+  (`!request.path.endsWith("/models")`). **Apply** in the console merge-patches the
+  `RateLimitPolicy`; the Kuadrant operator rewrites the Limitador limits within seconds. Praxis
+  variant: Route `praxis-ai-limited` → listener `limited` → `rate_limit` bucket as in A4; **Apply**
+  edits `rate`/`burst` in ConfigMap `praxis-ai-config` and annotates the Praxis pod so the kubelet
+  syncs the file right away, then Praxis hot-reloads (A5).
 * **You see:** 10 parallel requests: 5 × 200, 5 × 429; bob has his own 5. After the change: 2 × 200,
   8 × 429, within a few seconds. The Praxis limiter gives the same numbers, but for **everybody
   together**: it doesn't know who is calling.
@@ -630,6 +804,11 @@ two headers the Connectivity Link `AuthPolicy` writes on every request (`x-consu
 
 **F5. Token limits.** Console: *Token limits*, as **alice**, **Send until limited**; then as bob.
 * **Do:** `for i in $(seq 8); do ask /v2/chat/completions $KEY_ALICE fast "Tell me about OpenShift"; done`
+* **What happens:** the B3 mechanism, on the API routes: before each request the wasm filter checks
+  alice's counter (route `llm-api-v2`, limit `api-free` because her tier is `free`), and after each
+  answer it reads `usage.total_tokens` and adds it. OpenAI answers carry `usage` too, so they're
+  charged the same way. Changing a limit in the console is a JSON patch of
+  `/spec/limits/api-free/rates/0/limit`; the counter itself keeps running until its window ends.
 * **You see:** about 90 tokens per answer; after roughly 500 tokens in the minute, **429**. bob, on
   gold (20 000 tokens/min), carries on. Change `free` to 2000 in the console and alice continues.
 * **Say:** "Requests are a poor proxy for cost. Connectivity Link reads `usage.total_tokens` from
@@ -663,6 +842,13 @@ two headers the Connectivity Link `AuthPolicy` writes on every request (`x-consu
   ask /v1/chat/completions $KEY_ALICE fast "hi" -H 'x-api-version: 2'    # 200, served by v2
   ask /v2/chat/completions $KEY_ALICE fast "hi"                          # 200
   ```
+* **What happens:** both HTTPRoutes attach to the same Gateway and hostname, so Envoy merges their
+  rules and picks the most specific match: `/v2/…` → `llm-api-v2`; `/v1/…` with
+  `x-api-version: 2` → the `llm-api-v2` rule with a header match (same path, more header matches
+  wins); any other `/v1/…` → `llm-api-v1`. Each rule's `backendRef` picks a different Praxis port,
+  so a different listener: `api-v1` (`:8084`) has no aliases and no OpenAI, and
+  `unknown-model-v1` answers **404** for `fast`. On the way back, `ResponseHeaderModifier` adds
+  `x-api-version` (and for v1, `Deprecation` / `Sunset` / `Link`) to every response, including errors.
 * **You see:** v1 and v2 side by side on the same host. v1 answers carry `Deprecation`, `Sunset`
   and `Link: </v2/chat/completions>; rel="successor-version"`. `fast` is a 404 on v1 and works on
   v2, also through the `x-api-version: 2` header on the v1 path.
@@ -710,6 +896,12 @@ two headers the Connectivity Link `AuthPolicy` writes on every request (`x-consu
   ask /v2/chat/completions $KEY_BOB   cloud "hi"                              # OpenAI
   ask /v2/chat/completions $KEY_ALICE cloud "hi" -H 'x-consumer-tier: gold'   # still 403
   ```
+* **What happens:** Authorino returns the headers from `response.success.headers` to Envoy along
+  with "allowed", and Envoy *sets* them on the request to Praxis, replacing any header of the same
+  name the client sent: alice's own `x-consumer-tier: gold` becomes `free`. In Praxis, `cloud` is
+  in the model list (passes `unknown-model-v2`), then `tier-gate`'s `static_response` has two
+  conditions, `when x-model: cloud` and `unless x-consumer-tier: gold`; both hold for alice →
+  **403** `tier_not_allowed`. For bob the `unless` fails, so the request goes on to F2's OpenAI path.
 * **You see:** free alice can't use OpenAI, gold bob can, and alice sending `x-consumer-tier: gold`
   herself changes nothing.
 * **Say:** "This decision needs who is calling, which only Connectivity Link knows, and what is
@@ -752,6 +944,14 @@ two headers the Connectivity Link `AuthPolicy` writes on every request (`x-consu
 
 **F8. Metrics: who calls which API and model, how fast, how many tokens.** Console: *Metrics*,
 **Mixed traffic**, wait for a scrape (15 to 30 s).
+* **What happens:** the `TelemetryPolicy` makes Kuadrant add two values to every Limitador call from
+  the wasm filter: `user` and `tier`. Limitador runs with `--metric-labels-default descriptors[1]`,
+  so they become labels on `authorized_calls`, `limited_calls` and `authorized_hits`, next to
+  `limitador_namespace="ai-gateways/<route>"`. Prometheus scrapes Limitador (PodMonitor
+  `kuadrant-limitador-monitor`), Praxis (`ServiceMonitor praxis-ai`) and the gateway Envoy
+  (`istio-pod-monitor`). The console backend runs the PromQL against the Thanos querier with its
+  ServiceAccount (`cluster-monitoring-view`); the ledger is the backend's own in-memory list of the
+  calls it made (it starts empty after a console restart).
 * **You see:** per consumer and API version (Limitador): allowed calls, 429s and hits charged; per
   model (Praxis): prompt and output tokens; per upstream cluster (Praxis): average latency and
   status classes; and the ledger, which joins them per request: consumer, API, model asked → served,
