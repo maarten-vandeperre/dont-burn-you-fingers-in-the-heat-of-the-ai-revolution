@@ -1,7 +1,7 @@
 # Persona: API owner. Who may call the models, and which tier they are on.
 #
 # Authentication: an API key, "Authorization: APIKEY <key>", matched against Secrets labelled
-# llm-gateway/consumer=true (created by `./deploy.sh ai-gateways cl-key <user> <free|gold>`).
+# llm-gateway/consumer=true (created by `./deploy.sh ai-gateways key <user> <free|gold>`).
 # The tier is an annotation on the key's Secret, so changing a consumer's tier is one
 # `oc annotate`, no redeploy.
 #

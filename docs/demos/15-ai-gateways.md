@@ -618,6 +618,70 @@ gateway plus policies. B1 shows the bare plumbing and proves that the policies a
   Config: [`auth-policy.yaml`](../../stack/ai-gateways/connectivity-link/auth-policy.yaml),
   [`httproute.yaml`](../../stack/ai-gateways/connectivity-link/httproute.yaml); the key Secret is
   made by `key()` in `ai-gateways.sh`.
+* **Configured by:** one `AuthPolicy` in
+  [`auth-policy.yaml`](../../stack/ai-gateways/connectivity-link/auth-policy.yaml) (the numbers
+  match the steps above), plus one Secret per consumer:
+  ```yaml
+  apiVersion: kuadrant.io/v1
+  kind: AuthPolicy
+  metadata:
+    name: llm-models-auth
+    namespace: ai-gateways
+  spec:
+    targetRef:                                 # attached to the route: guards both model paths
+      group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: llm-models
+    rules:
+      authentication:                          # (2) WHO are you?  no/unknown key -> 401
+        api-key-consumers:                     #     a name of your choice
+          apiKey:
+            allNamespaces: true                # Authorino runs in kuadrant-system; keys live in ai-gateways
+            selector:
+              matchLabels:
+                llm-gateway/consumer: "true"   # every Secret with this label is a valid key
+          credentials:
+            authorizationHeader:
+              prefix: APIKEY                   # read from "Authorization: APIKEY <key>"
+      authorization:                           # (3) MAY you call this?  false -> 403
+        tier-may-use-model:
+          patternMatching:
+            patterns:
+              - predicate: >-                  # CEL; auth.identity = the matched Secret
+                  request.path.startsWith("/gemma-3-270m-it/") ||
+                  auth.identity.metadata.annotations["llm-gateway/tier"] == "gold"
+      response:                                # (4) what later policies may use
+        success:
+          filters:
+            identity:                          # -> auth.identity.userid / auth.identity.tier
+              json:
+                properties:
+                  userid:
+                    expression: auth.identity.metadata.name          # llm-key-alice
+                  tier:
+                    expression: auth.identity.metadata.annotations["llm-gateway/tier"]   # free
+  ---
+  # One consumer = one Secret (./deploy.sh ai-gateways key alice free)
+  apiVersion: v1
+  kind: Secret
+  metadata:
+    name: llm-key-alice
+    namespace: ai-gateways
+    labels:
+      llm-gateway/consumer: "true"               # selected by the AuthPolicy above
+      authorino.kuadrant.io/managed-by: authorino  # Authorino only watches Secrets with this label
+    annotations:
+      llm-gateway/tier: free                     # read by the CEL rule: free -> Gemma only
+  stringData:
+    api_key: sk-llm-alice-…                      # the key the caller sends
+  ```
+  The model names in the rule are **paths**, because the HTTPRoute routes per path (B1): "free may
+  only call Gemma" is literally "free may only call `/gemma-3-270m-it/…`". To let free use Qwen
+  too, extend the predicate (`|| request.path.startsWith("/qwen3-0-6b/")`) and
+  `oc apply -k stack/ai-gateways/connectivity-link`, or `oc edit authpolicy llm-models-auth -n
+  ai-gateways`. Kuadrant updates Authorino within seconds. To change one *person* instead:
+  `./deploy.sh ai-gateways key alice gold` only changes the annotation, and her next call to Qwen
+  is 200. Revoking a key = deleting the Secret.
 * **Say:** "The key is a Kubernetes Secret, the tier is an annotation on it. The `AuthPolicy`
   validates the key with Authorino and runs a CEL rule: free may only call Gemma. Moving alice to
   gold is `./deploy.sh ai-gateways key alice gold`, no redeploy."
