@@ -1,0 +1,43 @@
+# Register mcp-finops in the demo 15 MCP gateway (namespace mcp-gateway), next to the "models"
+# and "ops" servers of Part G. Its tools appear to every MCP client as finops_<tool>, behind the
+# same Connectivity Link policies (API key, 30 tool calls/min per consumer, telemetry).
+#
+# The HTTPRoute must live in mcp-gateway (the Gateway's listeners allow routes from their own
+# namespace only) but the Service is here in agentops: the ReferenceGrant below, owned by
+# agentops, allows exactly that one cross-namespace reference.
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-mcp-gateway-to-mcp-finops
+  namespace: agentops
+spec:
+  from:
+    - {group: gateway.networking.k8s.io, kind: HTTPRoute, namespace: mcp-gateway}
+  to:
+    - {group: "", kind: Service, name: mcp-finops}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: mcp-finops
+  namespace: mcp-gateway
+  labels: {app.kubernetes.io/part-of: agentops-demo}
+spec:
+  parentRefs:
+    - {name: mcp-gateway, sectionName: internal}   # the hairpin listener the MCP router uses
+  hostnames: [finops.mcp.local]
+  rules:
+    - matches: [{path: {type: PathPrefix, value: /mcp}}]
+      backendRefs: [{name: mcp-finops, namespace: agentops, port: 8080}]
+---
+apiVersion: mcp.kuadrant.io/v1alpha1
+kind: MCPServerRegistration
+metadata:
+  name: finops
+  namespace: mcp-gateway
+  labels: {app.kubernetes.io/part-of: agentops-demo}
+spec:
+  targetRef: {group: gateway.networking.k8s.io, kind: HTTPRoute, name: mcp-finops}
+  prefix: finops_
+  hint: "LLM usage and cost per team and model (PostgreSQL) and the teams' LLM budgets (budget-api)."
+  category: [finops]

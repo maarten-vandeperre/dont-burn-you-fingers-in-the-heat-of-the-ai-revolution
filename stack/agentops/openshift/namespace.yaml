@@ -1,0 +1,43 @@
+# Namespace agentops = MLflow workspace "agentops" in OpenShift AI (one workspace per project).
+# The service account "agentops" runs the agent, the MCP server and the budget API; with the two
+# OpenShift AI MLflow roles below it may write traces, runs, evaluation datasets and prompts in
+# this workspace only (MLflow checks every request against Kubernetes RBAC on mlflow.kubeflow.org
+# resources: experiments, registeredmodels (= prompts too), datasets).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agentops
+  labels:
+    app.kubernetes.io/part-of: agentops-demo
+    opendatahub.io/dashboard: "true"        # listed as a project in the OpenShift AI dashboard
+    openshift.io/user-monitoring: "true"    # user-workload Prometheus scrapes the ServiceMonitor
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agentops
+  namespace: agentops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentops-mlflow-edit
+  namespace: agentops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mlflow-operator-mlflow-edit        # create / update / delete experiments, prompts, datasets
+subjects:
+  - {kind: ServiceAccount, name: agentops, namespace: agentops}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: agentops-mlflow-view
+  namespace: agentops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mlflow-operator-mlflow-view        # get / list them
+subjects:
+  - {kind: ServiceAccount, name: agentops, namespace: agentops}

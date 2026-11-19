@@ -24,6 +24,10 @@
 #               Connectivity Link + Praxis as one LLM API with a web console, and an MCP gateway:
 #               deploy | key | maas-key | openai-key | console | compare | test | guard | burst |
 #               api | mcp | mcp-test | platform | metrics | status | urls | destroy (stack/ai-gateways/ai-gateways.sh)
+#   agentops <cmd>  An AI agent with full AgentOps: MLflow tracing (agent, LLM, MCP tools, database,
+#               API) + Tempo, prompt registry, LLM judge, metrics; on the demo 15 gateways:
+#               deploy | ask | load | prompts | eval | judge | metrics | test | code | status | urls |
+#               destroy (stack/agentops/agentops.sh)
 #   rhdh        Developer Hub: render the catalog, wire tokens, enable the plugins of the running version
 #   sso         Install / update Keycloak (single sign-on) and GitLab on an existing stack
 #   gitlab      Push this repository into GitLab (group ai-platform) and register it with Argo CD
@@ -2289,6 +2293,7 @@ CMD=$1; shift
 [[ "$CMD" == "connectivity" ]] && exec "${ROOT_DIR}/stack/connectivity/connectivity.sh" "$@"
 [[ "$CMD" == "lightspeed" ]] && exec "${ROOT_DIR}/stack/lightspeed/lightspeed.sh" "$@"
 [[ "$CMD" == "ai-gateways" ]] && exec "${ROOT_DIR}/stack/ai-gateways/ai-gateways.sh" "$@"
+[[ "$CMD" == "agentops" ]] && exec "${ROOT_DIR}/stack/agentops/agentops.sh" "$@"
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case $1 in

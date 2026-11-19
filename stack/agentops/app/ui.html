@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FinOps Agent</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#151a23; --mute:#5b6473; --line:#dfe3ea; --brand:#ee0000;
+          --ok:#147a3d; --warn:#9a6700; --bad:#b42318; --llm:#4b3fbf; --tool:#0b6e7f; }
+  * { box-sizing:border-box } body { margin:0; font:14px/1.45 system-ui,-apple-system,"Red Hat Text",sans-serif; background:var(--bg); color:var(--ink) }
+  header { background:#151a23; color:#fff; padding:12px 20px; display:flex; gap:16px; align-items:center; flex-wrap:wrap }
+  header b { font-size:16px } header .sub { color:#a7b0bf; font-size:12px } header .sp { flex:1 }
+  header a { color:#cfd6e2; font-size:12px; margin-left:12px }
+  main { max-width:1100px; margin:0 auto; padding:20px 16px 60px; display:grid; gap:16px }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:end }
+  label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--mute); margin-bottom:4px }
+  select, textarea, button { font:inherit } select, textarea { border:1px solid var(--line); border-radius:8px; padding:8px; background:#fff; color:var(--ink) }
+  textarea { width:100%; min-height:64px; resize:vertical }
+  button { border:0; border-radius:8px; padding:9px 16px; background:var(--ink); color:#fff; cursor:pointer } button:disabled { opacity:.5 }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px } .chip { background:#eef1f5; color:var(--ink); padding:5px 10px; font-size:12px }
+  .answer { white-space:pre-wrap; font-size:15px } .meta { color:var(--mute); font-size:12px; margin-top:8px }
+  .steps { list-style:none; padding:0; margin:0; display:grid; gap:6px }
+  .steps li { border-left:3px solid var(--line); padding:6px 10px; background:#fafbfc; border-radius:0 6px 6px 0 }
+  .steps li.llm { border-color:var(--llm) } .steps li.tool { border-color:var(--tool) }
+  .steps .k { font-weight:600 } .steps pre { margin:4px 0 0; white-space:pre-wrap; font-size:12px; color:var(--mute) }
+  .badge { display:inline-block; font-size:11px; padding:1px 7px; border-radius:99px; background:#eef1f5; margin-left:6px }
+  .ok { color:var(--ok) } .bad { color:var(--bad) } a { color:#0b5cad }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px } @media (max-width:800px){ .grid2 { grid-template-columns:1fr } }
+  table { border-collapse:collapse; width:100% } td, th { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); font-size:12px; vertical-align:top }
+</style>
+</head>
+<body>
+<header>
+  <div><b>FinOps Agent</b><div class="sub">AgentOps demo 16 · prompts from MLflow · LLM and MCP through Connectivity Link · traced end to end</div></div>
+  <div class="sp"></div>
+  <a id="lnk-traces" target="_blank">MLflow traces ↗</a>
+  <a id="lnk-mlflow" target="_blank">MLflow ↗</a>
+</header>
+<main>
+  <section class="card">
+    <div class="row">
+      <div><label>model (LLM API alias)</label><select id="model"></select></div>
+      <div><label>system prompt</label><select id="prompt"></select></div>
+      <div style="flex:1"></div>
+      <button id="ask">Ask</button>
+    </div>
+    <div style="margin-top:12px"><label>question</label><textarea id="q">Which team spent the most on LLMs in the last 7 days, and is it within its budget?</textarea></div>
+    <div class="chips" id="presets"></div>
+  </section>
+
+  <section class="card" id="out" hidden>
+    <div class="answer" id="answer"></div>
+    <div class="meta" id="meta"></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card"><label>what the agent did (also in the trace)</label><ul class="steps" id="steps"><li>Ask a question.</li></ul></section>
+    <section class="card"><label>prompt registry: finops-agent</label><table id="versions"></table>
+      <div class="meta">Move the <b>production</b> alias in MLflow (Prompts) or with <code>./deploy.sh agentops prompts promote 2</code>; the agent picks it up within a minute, no redeploy.</div></section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const PRESETS = [
+  "Which team spent the most on LLMs in the last 7 days, and is it within its budget?",
+  "Why did the support team's LLM cost go up?",
+  "Is the payments team within its LLM budget?",
+  "Which team used the most tokens in the last 30 days?",
+  "What is the request throttle on our LLM API?",
+];
+let cfg = null;
+function esc(s) { return String(s ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+async function load() {
+  cfg = await (await fetch("api/config")).json();
+  $("model").innerHTML = cfg.models.map((m) => `<option>${m}</option>`).join("");
+  const opts = Object.entries(cfg.aliases).map(([a, v]) => `<option value="${a}">@${a} (v${v})</option>`)
+    .concat(cfg.versions.map((v) => `<option value="${v.version}">version ${v.version}</option>`));
+  $("prompt").innerHTML = opts.join("") || `<option value="production">@production</option>`;
+  $("versions").innerHTML = "<tr><th>version</th><th>aliases</th><th>commit message</th></tr>" +
+    cfg.versions.map((v) => `<tr><td>v${v.version}</td><td>${v.aliases.map((a) => `<span class="badge">@${a}</span>`).join("")}</td><td>${esc(v.commit)}</td></tr>`).join("");
+  $("lnk-traces").href = cfg.traces_url; $("lnk-mlflow").href = cfg.mlflow;
+}
+$("presets").innerHTML = PRESETS.map((p, i) => `<button class="chip" data-i="${i}">${esc(p)}</button>`).join("");
+$("presets").onclick = (e) => { if (e.target.dataset.i) $("q").value = PRESETS[e.target.dataset.i]; };
+$("ask").onclick = async () => {
+  $("ask").disabled = true; $("ask").textContent = "Thinking…";
+  $("steps").innerHTML = "<li>…</li>";
+  try {
+    const r = await fetch("api/ask", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question: $("q").value, model: $("model").value, prompt: $("prompt").value }) });
+    const d = await r.json();
+    $("out").hidden = false;
+    $("answer").textContent = d.answer ?? JSON.stringify(d);
+    const link = cfg ? `${cfg.traces_url}?selectedEvaluationId=${d.trace_id}` : "#";
+    $("meta").innerHTML = `<span class="${d.status === "ok" ? "ok" : "bad"}">${esc(d.status)}</span> · prompt v${esc(d.prompt_version)} · model ${esc(d.model)} · ` +
+      `${d.tokens ? d.tokens.prompt + d.tokens.completion : "?"} tokens · ${esc(d.seconds)} s · trace <a target="_blank" href="${link}">${esc(d.trace_id)}</a>`;
+    $("steps").innerHTML = (d.steps || []).map((s) => s.type === "llm"
+      ? `<li class="llm"><span class="k">LLM</span> ${esc(s.model)} <span class="badge">${s.ms} ms</span><span class="badge">${s.tokens ?? "?"} tokens</span>${s.tool_calls.length ? `<pre>asks for: ${esc(s.tool_calls.join(", "))}</pre>` : "<pre>final answer</pre>"}</li>`
+      : `<li class="tool"><span class="k">MCP tool</span> ${esc(s.tool)} <span class="badge">${s.ms} ms</span><pre>${esc(JSON.stringify(s.args))}\n→ ${esc(s.result)}</pre></li>`).join("") || "<li>no steps</li>";
+  } catch (e) { $("answer").textContent = "error: " + e; $("out").hidden = false; }
+  $("ask").disabled = false; $("ask").textContent = "Ask"; load();
+};
+load().catch((e) => { $("steps").innerHTML = `<li class="bad">config: ${esc(e)}</li>`; });
+</script>
+</body>
+</html>

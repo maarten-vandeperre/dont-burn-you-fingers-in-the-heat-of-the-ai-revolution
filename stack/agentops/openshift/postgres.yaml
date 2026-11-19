@@ -1,0 +1,69 @@
+# The "dataset" the agent queries: PostgreSQL with 30 days of LLM usage per team and model
+# (../app/seed.sql, loaded at start; idempotent). emptyDir on purpose: a restart reseeds it relative to
+# today, so the evaluation questions keep the same answers.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres
+  namespace: agentops
+stringData:
+  POSTGRESQL_USER: finops
+  POSTGRESQL_PASSWORD: finops-demo
+  POSTGRESQL_DATABASE: finops
+  POSTGRESQL_ADMIN_PASSWORD: finops-admin
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: agentops
+data:
+  # the rhel9/postgresql image sources /opt/app-root/src/postgresql-start/*.sh on every start,
+  # after it created POSTGRESQL_USER and POSTGRESQL_DATABASE (postgresql-init/ runs before that,
+  # when the database doesn't exist yet). seed.sql is idempotent.
+  seed.sh: |
+    psql -v ON_ERROR_STOP=1 -d "$POSTGRESQL_DATABASE" -f /opt/seed/seed.sql
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: agentops
+  labels: {app: postgres, app.kubernetes.io/part-of: agentops-demo}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: postgres}}
+  template:
+    metadata:
+      labels: {app: postgres, app.kubernetes.io/part-of: agentops-demo}
+    spec:
+      containers:
+        - name: postgres
+          image: registry.redhat.io/rhel9/postgresql-16:latest
+          envFrom: [{secretRef: {name: postgres}}]
+          ports: [{name: pg, containerPort: 5432}]
+          readinessProbe:
+            exec: {command: ["/usr/libexec/check-container"]}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/pgsql/data}
+            - {name: init, mountPath: /opt/app-root/src/postgresql-start}
+            - {name: seed, mountPath: /opt/seed}
+      volumes:
+        - {name: data, emptyDir: {}}
+        - {name: init, configMap: {name: postgres-init}}
+        - {name: seed, configMap: {name: agentops-seed}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: agentops
+spec:
+  selector: {app: postgres}
+  ports: [{name: pg, port: 5432, targetPort: pg}]

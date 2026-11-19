@@ -1,0 +1,162 @@
+# The three demo services. Same image (agentops-runtime), same code ConfigMap, one entry point each.
+#
+#   finops-agent  :8080  UI + /api/ask + /metrics. LLM via the demo 15 LLM API (consumer "agent"),
+#                        tools via the demo 15 MCP gateway, prompt from the MLflow registry.
+#   mcp-finops    :8080  MCP server (POST /mcp): PostgreSQL + budget-api. Registered in the MCP
+#                        gateway (mcp-registration.yaml), not exposed outside the cluster.
+#   budget-api    :8080  a plain REST API, called by mcp-finops.
+#
+# Tracing (all three): MLflow SDK -> MLflow server (workspace agentops, experiment finops-agent)
+# and, with the dual export, -> OTel collector (tracing-system) -> Tempo.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: finops-agent
+  namespace: agentops
+  labels: {app: finops-agent, app.kubernetes.io/part-of: agentops-demo}
+  annotations:
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"agentops-runtime:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"agent\")].image"}]'
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: finops-agent}}
+  template:
+    metadata:
+      labels: {app: finops-agent, app.kubernetes.io/part-of: agentops-demo}
+    spec:
+      serviceAccountName: agentops
+      containers:
+        - name: agent
+          image: agentops-runtime:latest
+          command: ["/usr/bin/python3.12", "-u", "/opt/agentops/agent.py"]
+          workingDir: /opt/agentops
+          envFrom:
+            - configMapRef: {name: agentops-params}      # cluster URLs, written by agentops.sh
+          env:
+            - {name: OTEL_SERVICE_NAME, value: finops-agent}
+            - name: AGENT_API_KEY                         # Connectivity Link consumer "agent" (gold)
+              valueFrom: {secretKeyRef: {name: agentops-keys, key: agent}}
+            # MLflow's LLM judges (evaluate.py, judge_traces.py run in this pod) call the judge
+            # model with LiteLLM = a plain OpenAI request: base URL + "Bearer <key>"
+            - {name: OPENAI_API_BASE, valueFrom: {configMapKeyRef: {name: agentops-params, key: LLM_BASE_URL}}}
+            - name: OPENAI_API_KEY                        # Connectivity Link consumer "judge" (gold)
+              valueFrom: {secretKeyRef: {name: agentops-keys, key: judge}}
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 5, periodSeconds: 5}
+          resources:
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {memory: 2Gi}
+          volumeMounts: [{name: code, mountPath: /opt/agentops}]
+      volumes: [{name: code, configMap: {name: agentops-code}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-finops
+  namespace: agentops
+  labels: {app: mcp-finops, app.kubernetes.io/part-of: agentops-demo}
+  annotations:
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"agentops-runtime:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"mcp\")].image"}]'
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: mcp-finops}}
+  template:
+    metadata:
+      labels: {app: mcp-finops, app.kubernetes.io/part-of: agentops-demo}
+    spec:
+      serviceAccountName: agentops
+      containers:
+        - name: mcp
+          image: agentops-runtime:latest
+          command: ["/usr/bin/python3.12", "-u", "/opt/agentops/mcp_finops.py"]
+          workingDir: /opt/agentops
+          envFrom: [{configMapRef: {name: agentops-params}}]
+          env:
+            - {name: OTEL_SERVICE_NAME, value: mcp-finops}
+            - {name: PGHOST, value: postgres}
+            - {name: PGDATABASE, value: finops}
+            - {name: PGUSER, value: agent_ro}            # read-only role from seed.sql
+            - {name: PGPASSWORD, value: agent-ro}
+            - {name: BUDGET_API_URL, value: "http://budget-api:8080"}
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 5, periodSeconds: 5}
+          resources:
+            requests: {cpu: 50m, memory: 384Mi}
+            limits: {memory: 1Gi}
+          volumeMounts: [{name: code, mountPath: /opt/agentops}]
+      volumes: [{name: code, configMap: {name: agentops-code}}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: budget-api
+  namespace: agentops
+  labels: {app: budget-api, app.kubernetes.io/part-of: agentops-demo}
+  annotations:
+    image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"agentops-runtime:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"api\")].image"}]'
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: budget-api}}
+  template:
+    metadata:
+      labels: {app: budget-api, app.kubernetes.io/part-of: agentops-demo}
+    spec:
+      serviceAccountName: agentops
+      containers:
+        - name: api
+          image: agentops-runtime:latest
+          command: ["/usr/bin/python3.12", "-u", "/opt/agentops/budget_api.py"]
+          workingDir: /opt/agentops
+          envFrom: [{configMapRef: {name: agentops-params}}]
+          env:
+            - {name: OTEL_SERVICE_NAME, value: budget-api}
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /healthz, port: http}, initialDelaySeconds: 5, periodSeconds: 5}
+          resources:
+            requests: {cpu: 50m, memory: 384Mi}
+            limits: {memory: 1Gi}
+          volumeMounts: [{name: code, mountPath: /opt/agentops}]
+      volumes: [{name: code, configMap: {name: agentops-code}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: finops-agent, namespace: agentops, labels: {app: finops-agent}}
+spec:
+  selector: {app: finops-agent}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mcp-finops, namespace: agentops, labels: {app: mcp-finops}}
+spec:
+  selector: {app: mcp-finops}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: budget-api, namespace: agentops, labels: {app: budget-api}}
+spec:
+  selector: {app: budget-api}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: finops-agent
+  namespace: agentops
+  annotations:
+    haproxy.router.openshift.io/timeout: 300s     # a question with a CPU model can take a while
+spec:
+  to: {kind: Service, name: finops-agent}
+  port: {targetPort: http}
+  tls: {termination: edge, insecureEdgeTerminationPolicy: Redirect}
+---
+# agent_requests_total, agent_request_seconds, agent_llm_tokens_total, agent_tool_calls_total ...
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: finops-agent
+  namespace: agentops
+spec:
+  selector: {matchLabels: {app: finops-agent}}
+  endpoints:
+    - {port: http, path: /metrics/, interval: 15s}

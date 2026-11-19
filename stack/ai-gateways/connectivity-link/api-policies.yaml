@@ -28,6 +28,18 @@ spec:
         credentials:
           authorizationHeader:
             prefix: APIKEY
+      # The same keys sent the way every OpenAI SDK / LiteLLM sends them: "Authorization: Bearer
+      # <key>". Authorino accepts a request when ANY identity source matches, so clients that
+      # can't change the header prefix (MLflow's LLM judges in demo 16, LangChain, ...) work as is.
+      api-key-bearer:
+        apiKey:
+          allNamespaces: true
+          selector:
+            matchLabels:
+              llm-gateway/consumer: "true"
+        credentials:
+          authorizationHeader:
+            prefix: Bearer
     response:
       success:
         # Injected into the request towards Praxis, overwriting whatever the client sent:

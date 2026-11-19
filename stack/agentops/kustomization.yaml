@@ -1,0 +1,34 @@
+# AgentOps demo (docs/demos/16-agentops.md). Applied by ./deploy.sh agentops deploy, which first
+# writes openshift/cluster-params.env (cluster URLs) and the Secret agentops-keys (consumer keys).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - openshift/namespace.yaml
+  - openshift/build.yaml
+  - openshift/postgres.yaml
+  - openshift/apps.yaml
+  - openshift/mcp-registration.yaml
+generatorOptions:
+  disableNameSuffixHash: true      # fixed names: the Deployments mount them; agentops.sh restarts on change
+  labels:
+    app.kubernetes.io/part-of: agentops-demo
+configMapGenerator:
+  - name: agentops-code
+    namespace: agentops
+    files:
+      - app/common.py
+      - app/agent.py
+      - app/mcp_finops.py
+      - app/budget_api.py
+      - app/prompts.py
+      - app/evaluate.py
+      - app/judge_traces.py
+      - app/ui.html
+  - name: agentops-seed
+    namespace: agentops
+    files:
+      - app/seed.sql
+  - name: agentops-params
+    namespace: agentops
+    envs:
+      - openshift/cluster-params.env

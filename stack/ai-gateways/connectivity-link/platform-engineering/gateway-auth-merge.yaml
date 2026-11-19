@@ -28,6 +28,15 @@ spec:
           credentials:
             authorizationHeader:
               prefix: APIKEY
+        api-key-bearer:                  # "Authorization: Bearer <key>" (OpenAI SDKs), see api-policies.yaml
+          apiKey:
+            allNamespaces: true
+            selector:
+              matchLabels:
+                llm-gateway/consumer: "true"
+          credentials:
+            authorizationHeader:
+              prefix: Bearer
       response:
         success:
           headers:

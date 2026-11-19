@@ -1439,6 +1439,9 @@ two headers the Connectivity Link `AuthPolicy` writes on every request (`x-consu
         api-key-consumers:
           apiKey: {allNamespaces: true, selector: {matchLabels: {llm-gateway/consumer: "true"}}}
           credentials: {authorizationHeader: {prefix: APIKEY}}
+        api-key-bearer:                              # the same keys as "Bearer <key>": what OpenAI SDKs,
+          apiKey: {allNamespaces: true, selector: …} # LangChain and LiteLLM send (demo 16's agent and judge)
+          credentials: {authorizationHeader: {prefix: Bearer}}
       response:
         success:
           headers:                                   # set on the request towards Praxis

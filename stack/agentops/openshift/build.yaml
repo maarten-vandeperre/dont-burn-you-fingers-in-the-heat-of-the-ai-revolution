@@ -1,0 +1,37 @@
+# The runtime image: the OpenShift AI MLflow image (same MLflow 3.10 as the server, plus openai,
+# litellm, fastapi, uvicorn, psycopg2, httpx, prometheus-client) + the OTLP exporter, so the MLflow
+# SDK can send every span to the platform's OpenTelemetry collector (Tempo) as well, + tenacity.
+# The demo code itself is NOT in the image: it's ConfigMap agentops-code (kustomization), mounted
+# at /opt/agentops, so a code change is an `oc apply -k` + rollout restart, no rebuild.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: agentops-runtime
+  namespace: agentops
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: agentops-runtime
+  namespace: agentops
+spec:
+  output:
+    to: {kind: ImageStreamTag, name: "agentops-runtime:latest"}
+  source:
+    type: Dockerfile
+    dockerfile: |
+      FROM registry.redhat.io/rhoai/odh-mlflow-rhel9@sha256:eea6792da378f1cfb809c31b34f90413c13454208900f5be628d6a109347c3d7
+      USER 0
+      # tenacity: LiteLLM's retry library. MLflow's judges retry on a 429 from the LLM API (the
+      # gateway's 5 req/s per consumer), and without it the retry itself fails.
+      RUN /usr/bin/python3.12 -m pip install --no-cache-dir opentelemetry-exporter-otlp-proto-http==1.42.1 tenacity==9.1.2 \
+       && /usr/bin/python3.12 -c "import opentelemetry.exporter.otlp.proto.http.trace_exporter, tenacity, mlflow, openai, psycopg2, fastapi"
+      USER 1001
+      WORKDIR /opt/agentops
+      ENV HOME=/tmp PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+      ENTRYPOINT []
+  strategy:
+    type: Docker
+    dockerStrategy: {}
+  resources:
+    limits: {memory: 2Gi}
