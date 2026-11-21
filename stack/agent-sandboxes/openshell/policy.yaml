@@ -1,0 +1,42 @@
+# OpenShell sandbox policy for the Claude Code sandbox (Part B). Default-deny: anything not listed
+# here is refused, for every process in the sandbox, at the supervisor's proxy (outside the
+# agent's reach) - not by Claude Code's own settings.
+#
+#   filesystem_policy   Landlock, fixed at sandbox creation: the OS and tools read-only, only the
+#                       workspace (/sandbox) and /tmp writable. No access to anything else.
+#   network_policies    LIVE: `openshell policy set|update` changes them on a running sandbox.
+#                       Per endpoint: host + port, protocol rest = L7 inspection of every request,
+#                       access read-only = GET/HEAD/OPTIONS only, enforcement enforce = block
+#                       (the default, audit, only logs). Per BINARY: npm (node) may fetch from the
+#                       npm registry, git may read github.com, nothing else may.
+#   (company-llm)       not here: the attached provider profile (profile-company-llm.yaml) adds
+#                       the LLM API endpoint for the Claude Code binary, with its credential.
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only: [/bin, /usr, /lib, /lib64, /opt, /etc, /proc, /dev/urandom, /var/log]
+  read_write: [/sandbox, /tmp, /dev/null]
+landlock:
+  compatibility: best_effort
+
+network_policies:
+  npm_registry:
+    endpoints:
+      - host: registry.npmjs.org
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only
+    binaries:
+      - {path: /usr/bin/node-22}                       # npm is a Node.js script: its interpreter
+  github_readonly:
+    endpoints:
+      - host: github.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        access: read-only                              # clone and fetch yes, push no
+    binaries:
+      - {path: /usr/libexec/git-core/git-remote-http}
+      - {path: /usr/libexec/git-core/git-remote-https}

@@ -1,0 +1,37 @@
+# OpenShell provider profile: the company LLM API (demo 15), Anthropic endpoint, for Claude Code.
+# Import once per gateway, then create a provider (the concrete key) from it:
+#   openshell profile import -f profile-company-llm.yaml --global
+#   openshell provider create --name company-llm --type company-llm \
+#     --credential ANTHROPIC_AUTH_TOKEN=<gateway key>         (./deploy.sh agent-sandboxes openshell-provider)
+#
+# What it does: the sandbox only ever sees a PLACEHOLDER in ANTHROPIC_AUTH_TOKEN
+# (openshell:resolve:env:ANTHROPIC_AUTH_TOKEN). The supervisor, outside the agent's reach, swaps in
+# the real key, and only when ALL of these hold:
+#   * the request goes to the host / port / path below (llm-gateway, 443, /anthropic/**),
+#   * in the Authorization header (Claude Code sends "Authorization: Bearer <token>"),
+#   * from one of the binaries below (Claude Code itself; not curl, not python).
+# Anywhere else the placeholder stays a useless string: a prompt-injected agent that sends its
+# "key" to another server sends nothing.
+#
+# __LLM_HOST__ is filled in by ./deploy.sh agent-sandboxes.
+id: company-llm
+display_name: Company LLM API
+description: The company LLM API (Connectivity Link + Praxis), Anthropic Messages endpoint
+category: inference
+inference_capable: true
+credentials:
+  - name: gateway_key
+    description: LLM API key of this sandbox's consumer (llm-key-sandbox, gold tier)
+    env_vars: [ANTHROPIC_AUTH_TOKEN]
+    required: true
+    auth_style: header
+    header_name: Authorization
+endpoints:
+  - host: __LLM_HOST__
+    port: 443
+    path: /anthropic/**
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+binaries:
+  - /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe

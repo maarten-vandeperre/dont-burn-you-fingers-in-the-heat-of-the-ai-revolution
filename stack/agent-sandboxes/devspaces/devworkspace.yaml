@@ -1,0 +1,80 @@
+# A Dev Spaces workspace with Claude Code, created directly as a DevWorkspace (it shows up in the
+# Dev Spaces dashboard like any other). The same content as a devfile.yaml in a git repository
+# works with a factory URL: https://<devspaces>/#<git-url>.
+#
+#   tools container   claude-code-udi: the Dev Spaces UDI + Claude Code + the platform's managed
+#                     settings (stack/agent-sandboxes/images/)
+#   model             ANTHROPIC_BASE_URL = the company LLM API, Anthropic endpoint (demo 15)
+#   key               ANTHROPIC_AUTH_TOKEN, NOT in this file: Secret claude-code-llm-key in the
+#                     user's namespace, automounted as environment variables into every workspace
+#                     (labels controller.devfile.io/mount-to-devworkspace + watch-secret,
+#                     annotation controller.devfile.io/mount-as: env)
+#   network           EgressFirewall "default" in the namespace (egress-firewall.yaml)
+#
+# __NS__, __IMAGE__ and __LLM_BASE__ are filled in by ./deploy.sh agent-sandboxes devspaces.
+apiVersion: workspace.devfile.io/v1alpha2
+kind: DevWorkspace
+metadata:
+  name: claude-code-sandbox
+  namespace: __NS__
+  annotations:
+    che.eclipse.org/che-editor: che-incubator/che-code/latest
+  labels:
+    app.kubernetes.io/part-of: agent-sandboxes-demo
+spec:
+  started: true
+  routingClass: che
+  contributions:
+    - name: editor
+      kubernetes:
+        name: che-code-claude-code-sandbox
+  template:
+    attributes:
+      controller.devfile.io/devworkspace-config:
+        name: devworkspace-config
+        namespace: openshift-devspaces
+      controller.devfile.io/storage-type: per-user
+      # This cluster's Dev Spaces enables container builds in workspaces (podman in the UDI), so
+      # workspace pods carry SETUID/SETGID and need SCC container-build. The dashboard adds this
+      # attribute itself. For agent workspaces a platform team may turn container builds off
+      # (CheCluster spec.devEnvironments.disableContainerBuildCapabilities: true): fewer powers
+      # in the pod the agent runs in.
+      controller.devfile.io/scc: container-build
+    projects:
+      - name: dont-burn-your-fingers
+        git:
+          remotes:
+            origin: https://github.com/maarten-vandeperre/dont-burn-you-fingers-in-the-heat-of-the-ai-revolution.git
+    components:
+      - name: tools
+        container:
+          image: __IMAGE__
+          memoryLimit: 4Gi
+          cpuLimit: "2"
+          mountSources: true
+          env:
+            - name: ANTHROPIC_BASE_URL
+              value: __LLM_BASE__
+    commands:
+      # Claude Code asks for a theme and a login on first start; the key comes from the
+      # environment, so mark onboarding done (only if the developer has no ~/.claude.json yet).
+      - id: claude-onboarding
+        exec:
+          component: tools
+          label: (internal) Claude Code first-run settings
+          commandLine: '[ -f "$HOME/.claude.json" ] || echo ''{"hasCompletedOnboarding":true}'' > "$HOME/.claude.json"'
+      - id: 1-ask-claude
+        exec:
+          component: tools
+          label: 1. Claude Code (interactive)
+          workingDir: ${PROJECT_SOURCE}
+          commandLine: claude
+      - id: 2-check-fence
+        exec:
+          component: tools
+          label: 2. What can this workspace reach?
+          workingDir: ${PROJECT_SOURCE}
+          commandLine: bash stack/agent-sandboxes/devspaces/check-fence.sh
+    events:
+      postStart:
+        - claude-onboarding

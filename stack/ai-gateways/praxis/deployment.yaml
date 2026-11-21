@@ -57,6 +57,7 @@ spec:
             - {name: guarded, containerPort: 8083}
             - {name: api-v1, containerPort: 8084}     # behind Connectivity Link only (no Route)
             - {name: api-v2, containerPort: 8085}     # behind Connectivity Link only (no Route)
+            - {name: api-anthropic, containerPort: 8087}   # demo 17, behind Connectivity Link only
             - {name: metrics, containerPort: 9902}
           # /healthy, not /ready: /ready is 503 as soon as ONE model has no healthy endpoint,
           # which would take the whole gateway out of its Routes.
@@ -103,6 +104,7 @@ spec:
     - {name: guarded, port: 8083, targetPort: guarded}
     - {name: api-v1, port: 8084, targetPort: api-v1}
     - {name: api-v2, port: 8085, targetPort: api-v2}
+    - {name: api-anthropic, port: 8087, targetPort: api-anthropic}
     - {name: metrics, port: 9902, targetPort: metrics}
 ---
 apiVersion: monitoring.coreos.com/v1

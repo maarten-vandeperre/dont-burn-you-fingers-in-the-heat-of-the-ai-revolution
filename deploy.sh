@@ -28,6 +28,13 @@
 #               API) + Tempo, prompt registry, LLM judge, metrics; on the demo 15 gateways:
 #               deploy | ask | load | prompts | eval | judge | metrics | test | code | status | urls |
 #               destroy (stack/agentops/agentops.sh)
+#   agent-sandboxes <cmd>  Claude Code on a leash: Kaiden (laptop), Dev Spaces (managed settings,
+#               automounted key, EgressFirewall), OpenShell on OpenShift (policy, credential
+#               placeholders); always on the demo 15 LLM API: deploy | claude | kaiden | devspaces |
+#               devspaces-check | devspaces-claude | devspaces-fence | openshell-install |
+#               openshell-connect | openshell-sandbox | openshell-check | openshell-claude |
+#               openshell-pypi | openshell-reset | openshell-uninstall | test | status | destroy
+#               (stack/agent-sandboxes/agent-sandboxes.sh)
 #   rhdh        Developer Hub: render the catalog, wire tokens, enable the plugins of the running version
 #   sso         Install / update Keycloak (single sign-on) and GitLab on an existing stack
 #   gitlab      Push this repository into GitLab (group ai-platform) and register it with Argo CD
@@ -2294,6 +2301,7 @@ CMD=$1; shift
 [[ "$CMD" == "lightspeed" ]] && exec "${ROOT_DIR}/stack/lightspeed/lightspeed.sh" "$@"
 [[ "$CMD" == "ai-gateways" ]] && exec "${ROOT_DIR}/stack/ai-gateways/ai-gateways.sh" "$@"
 [[ "$CMD" == "agentops" ]] && exec "${ROOT_DIR}/stack/agentops/agentops.sh" "$@"
+[[ "$CMD" == "agent-sandboxes" ]] && exec "${ROOT_DIR}/stack/agent-sandboxes/agent-sandboxes.sh" "$@"
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case $1 in

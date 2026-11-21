@@ -9,6 +9,8 @@ resources:
   # Part F: the LLM API (v1, v2) in front of Praxis, and its gateway-wide policies
   - api-routes.yaml
   - api-policies.yaml
+  # Demo 17: Anthropic endpoint for coding agents (HTTPRoute llm-api-anthropic in api-routes.yaml)
+  - envoyfilter-anthropic-tool-errors.yaml
 
 # Cluster specific value, written by ./deploy.sh ai-gateways deploy (same pattern as
 # platform/30-gateway and stack/connectivity/partner-api).
@@ -37,6 +39,9 @@ replacements:
         fieldPaths:
           - spec.hostnames.0
       - select: {kind: HTTPRoute, name: llm-api-v2}
+        fieldPaths:
+          - spec.hostnames.0
+      - select: {kind: HTTPRoute, name: llm-api-anthropic}
         fieldPaths:
           - spec.hostnames.0
       - select: {kind: Route, name: llm-gateway}

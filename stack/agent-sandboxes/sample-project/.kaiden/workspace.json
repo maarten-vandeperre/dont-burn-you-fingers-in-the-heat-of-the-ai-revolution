@@ -1,0 +1,6 @@
+{
+  "network": {
+    "mode": "deny",
+    "hosts": ["registry.npmjs.org", "pypi.org", "files.pythonhosted.org"]
+  }
+}

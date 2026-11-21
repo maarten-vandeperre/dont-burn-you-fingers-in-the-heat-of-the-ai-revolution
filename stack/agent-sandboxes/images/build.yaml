@@ -1,0 +1,106 @@
+# Two Claude Code images, built in the cluster, with the SAME platform policy baked in:
+# /etc/claude-code/managed-settings.json (managed-settings.json in this folder, added to the build
+# context from ConfigMap claude-code-managed-settings). Managed settings have the highest
+# precedence in Claude Code: a developer's ~/.claude/settings.json or a project's
+# .claude/settings.json cannot loosen them (model = the company LLM API, no bypass mode, no
+# reading .env / ~/.ssh / service account tokens, no curl / wget / WebFetch).
+#
+#   claude-code-sandbox   UBI 9 + Node.js 22 + Claude Code + git + python3: the workload image of
+#                         the OpenShell sandboxes (Part B). OpenShell adds its own supervisor.
+#   claude-code-udi       the Dev Spaces Universal Developer Image + Claude Code: the "tools"
+#                         container of the Dev Spaces workspace (Part C).
+#
+# Claude Code is pinned (CLAUDE_CODE_VERSION) and its auto-updater is off (managed settings): the
+# platform team decides when the agent changes, like any other tool in the image.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agent-sandboxes
+  labels:
+    app.kubernetes.io/part-of: agent-sandboxes-demo
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: claude-code-sandbox
+  namespace: agent-sandboxes
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: claude-code-udi
+  namespace: agent-sandboxes
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: claude-code-sandbox
+  namespace: agent-sandboxes
+spec:
+  output:
+    to: {kind: ImageStreamTag, name: "claude-code-sandbox:latest"}
+  source:
+    type: Dockerfile
+    configMaps:
+      - configMap: {name: claude-code-managed-settings}
+        destinationDir: policy
+    dockerfile: |
+      FROM registry.access.redhat.com/ubi9/nodejs-22:latest
+      ARG CLAUDE_CODE_VERSION=2.1.330
+      USER 0
+      RUN dnf -y install --setopt=install_weak_deps=0 git python3 jq procps-ng && dnf clean all \
+       && npm install -g --prefix /usr/local --no-fund --no-audit @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+       && /usr/local/bin/claude --version
+      # the binary OpenShell policies name: /usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe
+      COPY policy/managed-settings.json /etc/claude-code/managed-settings.json
+      RUN chmod 0755 /etc/claude-code && chmod 0644 /etc/claude-code/managed-settings.json
+      USER 1001
+      ENV HOME=/sandbox
+      WORKDIR /sandbox
+  strategy:
+    type: Docker
+    dockerStrategy: {}
+  resources:
+    limits: {memory: 2Gi}
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: claude-code-udi
+  namespace: agent-sandboxes
+spec:
+  output:
+    to: {kind: ImageStreamTag, name: "claude-code-udi:latest"}
+  source:
+    type: Dockerfile
+    configMaps:
+      - configMap: {name: claude-code-managed-settings}
+        destinationDir: policy
+    dockerfile: |
+      FROM registry.redhat.io/devspaces/udi-rhel9:latest
+      ARG CLAUDE_CODE_VERSION=2.1.330
+      USER 0
+      RUN npm install -g --prefix /usr/local --no-fund --no-audit @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+       && /usr/local/bin/claude --version
+      COPY policy/managed-settings.json /etc/claude-code/managed-settings.json
+      RUN chmod 0755 /etc/claude-code && chmod 0644 /etc/claude-code/managed-settings.json
+      USER 10001
+  strategy:
+    type: Docker
+    dockerStrategy: {}
+  resources:
+    limits: {memory: 3Gi}
+---
+# The workspaces (Dev Spaces user namespaces) and the OpenShell sandboxes (namespace openshell)
+# pull these images from the internal registry.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: image-pullers
+  namespace: agent-sandboxes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:image-puller
+subjects:
+  - {apiGroup: rbac.authorization.k8s.io, kind: Group, name: system:serviceaccounts}

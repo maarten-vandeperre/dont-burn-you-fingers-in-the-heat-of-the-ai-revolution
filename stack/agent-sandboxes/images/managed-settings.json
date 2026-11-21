@@ -1,0 +1,29 @@
+{
+  "model": "cloud",
+  "env": {
+    "ANTHROPIC_MODEL": "cloud",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "cloud",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "cloud",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "cloud",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "128000",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16000",
+    "DISABLE_PROMPT_CACHING": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_AUTOUPDATER": "1"
+  },
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(~/.ssh/**)",
+      "Read(~/.kube/**)",
+      "Read(/var/run/secrets/**)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "WebFetch",
+      "WebSearch"
+    ]
+  }
+}

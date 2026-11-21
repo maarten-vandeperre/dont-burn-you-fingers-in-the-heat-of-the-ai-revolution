@@ -24,6 +24,15 @@
 #   :8086 openai-egress  127.0.0.1 only, the single way out to api.openai.com: guardrails (coffee,
 #                        lemons, email addresses -> 403) and OpenAI key injection
 #
+# Demo 17 (agent sandboxes): coding agents on the same LLM API, behind the same llm-gateway.
+#   :8087 api-anthropic  the Anthropic Messages API (/anthropic/v1/messages on the llm-gateway):
+#                        Claude Code with ANTHROPIC_BASE_URL=<llm-api>/anthropic and its gateway
+#                        key as ANTHROPIC_AUTH_TOKEN. Same aliases and tier gate as api-v2.
+#   :8088 coding-egress  127.0.0.1 only, to api.openai.com for coding agents: OpenAI key
+#                        injection, NO chat guardrails (a coding agent's system prompt contains
+#                        e-mail addresses and its context any word; the openai-egress rules
+#                        would refuse every request). Its guardrail is the sandbox (demo 17).
+#
 # The model workloads (LLMInferenceService, maas-models) serve HTTPS with a certificate signed by
 # the OpenShift service CA, so Praxis verifies them against the injected service CA bundle and
 # connects with the Service's DNS name as SNI. No `verify: false` anywhere.
@@ -112,6 +121,14 @@ listeners:
   - name: openai-egress
     address: "127.0.0.1:8086"
     filter_chains: [observability, openai-guardrails, openai]
+  # Demo 17: coding agents (Anthropic Messages API) behind the llm-gateway (HTTPRoute
+  # llm-api-anthropic), and their own loopback hop to OpenAI.
+  - name: api-anthropic
+    address: "0.0.0.0:8087"
+    filter_chains: [api-observability, coding-compat, classify, translate, unknown-model-v2, tier-gate, coding-routing]
+  - name: coding-egress
+    address: "127.0.0.1:8088"
+    filter_chains: [observability, openai]
 
 filter_chains:
   - name: observability
@@ -452,6 +469,58 @@ filter_chains:
           - name: openai-egress          # loopback hop to the openai-egress listener
             endpoints:
               - "127.0.0.1:8086"
+
+  # Demo 17: model routing for coding agents. As model-routing, but OpenAI-bound requests take the
+  # coding-egress hop (no chat guardrails). Claude Code is configured with model "cloud" (or
+  # "smart"); see stack/agent-sandboxes/.
+  # Claude Code sends Anthropic-only options that translate into fields gpt-4o-mini refuses
+  # (output_config.effort -> reasoning_effort: 400; thinking and context_management have no
+  # Chat Completions equivalent, so the translation refuses them).
+  # Dropped at the gateway, before translation, so coding agents need no client-side tweaks.
+  - name: coding-compat
+    filters:
+      - filter: json_body
+        request_remove: [/output_config, /thinking, /context_management]
+
+  - name: coding-routing
+    filters:
+      # paths: the request filters still see the client's path (translate's path_rewrite only
+      # changes what goes upstream), so match on /v1/messages
+      - filter: model_to_provider
+        models:
+          - {model: gpt-4o-mini,     upstream: coding-egress, target_model: gpt-4o-mini,     paths: ["/v1/messages"]}
+          - {model: cloud,           upstream: coding-egress, target_model: gpt-4o-mini,     paths: ["/v1/messages"]}
+          - {model: qwen3-0-6b,      upstream: qwen,          target_model: qwen3-0-6b,      paths: ["/v1/messages"]}
+          - {model: smart,           upstream: qwen,          target_model: qwen3-0-6b,      paths: ["/v1/messages"]}
+          - {model: gemma-3-270m-it, upstream: gemma,         target_model: gemma-3-270m-it, paths: ["/v1/messages"]}
+          - {model: fast,            upstream: gemma,         target_model: gemma-3-270m-it, paths: ["/v1/messages"]}
+      - filter: stream_usage_inject
+      - filter: token_count
+        provider: openai
+      - filter: time_to_first_token
+      - filter: load_balancer
+        clusters:
+          - name: qwen
+            endpoints:
+              - "qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local:8000"
+            trusted_private_endpoints:
+              - qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local
+            tls:
+              sni: qwen3-0-6b-kserve-workload-svc.maas-models.svc.cluster.local
+              ca:
+                ca_path: /etc/service-ca/service-ca.crt
+          - name: gemma
+            endpoints:
+              - "gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local:8000"
+            trusted_private_endpoints:
+              - gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local
+            tls:
+              sni: gemma-3-270m-it-kserve-workload-svc.maas-models.svc.cluster.local
+              ca:
+                ca_path: /etc/service-ca/service-ca.crt
+          - name: coding-egress          # loopback hop to the coding-egress listener
+            endpoints:
+              - "127.0.0.1:8088"
 
   # Guardrails for everything that leaves for OpenAI. Native Praxis rules, no external service:
   # a match anywhere in the request body -> 403, OpenAI never sees the prompt. Local models are

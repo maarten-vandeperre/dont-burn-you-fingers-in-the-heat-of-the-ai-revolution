@@ -302,6 +302,11 @@ a database or a human approval. A proxy shouldn't do that.
 Honest limit of A2: we checked plain messages and streaming here. Claude Code also relies heavily
 on **tool use** (`tool_use` / `tool_result` blocks ⇄ OpenAI `tool_calls`), and a 0.6B CPU model is
 a weak tool caller anyway. Try your real client and a capable model before you promise it.
+[Demo 17](17-agent-sandboxes.md) did exactly that: the real Claude Code on gpt-4o-mini through a new
+`/anthropic` endpoint of the Part F LLM API (Praxis listener `api-anthropic`). It needed three
+fields dropped at the gateway (`thinking`, `output_config`, `context_management`), three client
+settings, and a Lua filter on the llm-gateway, because Praxis 0.9 refuses every tool result marked
+`is_error` (any failing command). See demo 17, B2.
 
 **A3. Tokens and time to first token, per model.**
 * **Do:** `./deploy.sh ai-gateways metrics` (Praxis section), or in the console **Observe > Metrics**:

@@ -91,3 +91,39 @@ spec:
         - name: praxis-ai
           port: 8085
       timeouts: {request: 0s, backendRequest: 0s}
+---
+# Demo 17 (agent sandboxes): the Anthropic Messages API for coding agents such as Claude Code.
+#   ANTHROPIC_BASE_URL=http://<llm-api-host>/anthropic   (Claude Code appends /v1/messages)
+#   ANTHROPIC_AUTH_TOKEN=<gateway key>                    (sent as "Authorization: Bearer <key>")
+# The gateway-wide policies apply as for v1/v2: key (APIKEY or Bearer), request throttle, tier.
+# Praxis listener api-anthropic translates to OpenAI Chat and routes the aliases (cloud, smart).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: llm-api-anthropic
+  namespace: ai-gateways
+  labels:
+    app.kubernetes.io/part-of: ai-gateways-demo
+spec:
+  parentRefs:
+    - name: llm-gateway
+  hostnames:
+    - REPLACED-BY-KUSTOMIZE
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /anthropic/}
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: {type: ReplacePrefixMatch, replacePrefixMatch: /}
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            remove: [Authorization, x-api-key]
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              - {name: x-api-version, value: anthropic}
+      backendRefs:
+        - name: praxis-ai
+          port: 8087                     # Praxis listener api-anthropic
+      timeouts: {request: 0s, backendRequest: 0s}

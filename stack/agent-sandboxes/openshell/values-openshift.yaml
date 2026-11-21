@@ -1,0 +1,51 @@
+# OpenShell 0.1.9 (Helm chart oci://ghcr.io/nvidia/openshell/helm-chart) on OpenShift 4.22.
+# Same OpenShift overlays as upstream's own OpenShift e2e tests (ci/values-openshift-scc.yaml and
+# ci/values-openshift-e2e.yaml in the OpenShell repo), plus this demo's sandbox image.
+#
+#   restricted-v2 SCC     no fixed UIDs: OpenShift assigns them from the namespace range. No
+#                         privileged SCC, no added capability (Landlock + seccomp user-notify
+#                         work unprivileged on RHCOS 9.8 / kernel 5.14.0-687).
+#   gateway access        passthrough Route + mutual TLS: only a CLI holding the client
+#                         certificate (Secret openshell-client-tls) gets in; a caller without
+#                         one is refused in the TLS handshake. (Port-forward works too, but
+#                         stalls `sandbox connect` on OpenShift, says upstream.)
+#                         allow_unauthenticated_users promotes that certificate holder to a
+#                         user; there is no OIDC here. Production: OIDC (Keycloak) per user.
+#   sandbox image         claude-code-sandbox, built in namespace agent-sandboxes
+#
+# openshiftRoute.host and pkiInitJob.serverDnsNames[0] are set by ./deploy.sh agent-sandboxes
+# openshell (the cluster's apps domain).
+fullnameOverride: openshell
+
+podSecurityContext: null
+securityContext:
+  runAsNonRoot: true
+  runAsUser: null
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+supervisor:
+  podSecurityContext:
+    runAsUser: null
+    runAsGroup: null
+    fsGroup: null
+
+server:
+  disableTls: false
+  telemetryEnabled: false          # no anonymous usage telemetry from the gateway / supervisors
+
+gatewayConfig:
+  openshell.gateway.auth:
+    allow_unauthenticated_users: true
+
+openshiftRoute:
+  enabled: true
+  annotations:
+    haproxy.router.openshift.io/timeout: 300s
+    haproxy.router.openshift.io/timeout-tunnel: 300s
+
+sandbox:
+  image:
+    repository: image-registry.openshift-image-registry.svc:5000/agent-sandboxes/claude-code-sandbox
+    tag: latest
+    pullPolicy: Always

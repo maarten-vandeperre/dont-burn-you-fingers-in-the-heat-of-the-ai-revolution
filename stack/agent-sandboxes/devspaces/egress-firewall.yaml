@@ -1,0 +1,32 @@
+# Network fence around a developer's Dev Spaces namespace (<user>-devspaces): OVN-Kubernetes
+# EgressFirewall, evaluated in order, first match wins. Only cluster-admins can create or change
+# it: the developer (admin of their own namespace) cannot remove it, neither can their agent.
+#
+#   allowed  the company LLM API (Claude Code's model), the npm registry (dependencies),
+#            github.com (git clone / push of the project)
+#   denied   everything else outside the cluster: api.anthropic.com, pastebin, example.com, ...
+#
+# Honest limit: an EgressFirewall works on IP addresses (dnsName rules are resolved to IPs). On
+# this cluster every *.apps route resolves to the same router address, so allowing the LLM API
+# allows every route of the cluster. It can't tell hosts behind one IP apart, nor see paths,
+# methods or credentials: that is what OpenShell's per-request proxy adds (Part B).
+#
+# __NS__ and __LLM_HOST__ are filled in by ./deploy.sh agent-sandboxes devspaces.
+apiVersion: k8s.ovn.org/v1
+kind: EgressFirewall
+metadata:
+  name: default                     # one EgressFirewall per namespace, always named "default"
+  namespace: __NS__
+spec:
+  egress:
+    - type: Allow
+      to: {dnsName: __LLM_HOST__}
+      ports: [{protocol: TCP, port: 443}]
+    - type: Allow
+      to: {dnsName: registry.npmjs.org}
+      ports: [{protocol: TCP, port: 443}]
+    - type: Allow
+      to: {dnsName: github.com}
+      ports: [{protocol: TCP, port: 443}]
+    - type: Deny
+      to: {cidrSelector: 0.0.0.0/0}
