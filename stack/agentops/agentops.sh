@@ -8,13 +8,21 @@
 #                                          judge, prompt v1/v2 in the MLflow prompt registry
 #   ./deploy.sh agentops ask "<question>" [model] [prompt]
 #                                          one question; prints answer, steps, trace id
-#   ./deploy.sh agentops load [n]          n questions (default 8) as live traffic, for the judge
+#   ./deploy.sh agentops load [n] [model] [prompt]
+#                                          n questions (default 8, model cloud, prompt production)
+#                                          as live traffic, for the judge
 #   ./deploy.sh agentops prompts [show|register|promote <version>]
 #                                          the MLflow prompt registry (finops-agent)
 #   ./deploy.sh agentops eval [refs...]    offline evaluation, judge model, prompt v1 vs v2
 #   ./deploy.sh agentops judge [n]         judge the n most recent live traces (assessments)
 #   ./deploy.sh agentops metrics           agent metrics + Limitador counters for agent / judge
 #   ./deploy.sh agentops test              the checks the demo relies on
+#   ./deploy.sh agentops prepare [cloud|smart]
+#                                          straight to the end state of the demo (~30 min): traces of
+#                                          parts A, B and D, live traffic on v1 and v2, the offline
+#                                          evaluation v1 vs v2 and judged live traces. Without an
+#                                          argument: cloud if it works, else the local model smart
+#                                          (also as judge). Ends with production = v2.
 #   ./deploy.sh agentops code              re-apply the code ConfigMap and restart (after an edit)
 #   ./deploy.sh agentops status | urls | destroy
 #
@@ -135,21 +143,25 @@ ask_cmd() {
                 else "    TOOL \(.tool) \(.args|tostring) \(.ms) ms" end)'
 }
 load() {
-  local n=${1:-8} i qs=(
+  local n=${1:-8} m=${2:-cloud} p=${3:-production} i qs=(
     "Which team spent the most on LLMs in the last 7 days, and is it within its budget?"
     "Why did the support team's LLM cost go up?"
     "Is the payments team within its LLM budget?"
     "Which team used the most tokens in the last 30 days?"
     "What is the request throttle on our LLM API?"
     "How much did marketing spend on OpenAI models this month?")
-  step "Live traffic: ${n} questions (source=load, prompt @production)"
+  step "Live traffic: ${n} questions (source=load, model ${m}, prompt ${p})"
   for i in $(seq 1 "$n"); do
-    ask "${qs[$(( (i - 1) % ${#qs[@]} ))]}" cloud production load \
+    ask "${qs[$(( (i - 1) % ${#qs[@]} ))]}" "$m" "$p" load \
       | jq -r '"    \(.status)  v\(.prompt_version)  \(.tokens.prompt + .tokens.completion) tokens  \(.seconds) s  \(.trace_id)"'
   done
 }
 prompts() { in_agent prompts.py "${@:-show}"; }
-evaluate() { in_agent evaluate.py "$@"; }
+evaluate() {  # EVAL_WORKERS (default 3): parallel rows and judges; 1 for the local model on CPU
+  local w=${EVAL_WORKERS:-3}
+  oc exec -n "$NS" deploy/finops-agent -c agent -- env MLFLOW_GENAI_EVAL_MAX_WORKERS="$w" \
+    MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS="$w" /usr/bin/python3.12 -u evaluate.py "$@"
+}
 judge() { in_agent judge_traces.py "$@"; }
 
 metrics() {
@@ -200,6 +212,69 @@ sys.exit(0 if all(svc.values()) else 1)" && ok "trace ${tid} has all four hops" 
   (( FAILED == 0 )) && echo && ok "all checks passed" || { echo; die "some checks failed"; }
 }
 
+# ----------------------------------------------------------------------------- prepare
+qwen_float32() {
+  # The local model as judge: MLflow's judges ask for structured output (a JSON schema), which vLLM
+  # on CPU applies with xgrammar, whose CPU kernel only takes float32 logits: in bfloat16 the engine
+  # dies ("logits must be of type float32"). models/qwen3-0-6b has --dtype=float32; this patches a
+  # cluster deployed before that.
+  local isvc=qwen3-0-6b ns=maas-models old
+  oc get llminferenceservice "$isvc" -n "$ns" >/dev/null 2>&1 || die "model smart (LLMInferenceService ${isvc} in ${ns}) not found"
+  if [[ "$(oc get llminferenceservice "$isvc" -n "$ns" -o jsonpath='{.spec.template.containers[0].args}')" == *--dtype=float32* ]]; then
+    ok "${isvc} runs in float32"; return
+  fi
+  info "adding --dtype=float32 to ${isvc} (restarts the model, ~4 min)"
+  oc patch llminferenceservice "$isvc" -n "$ns" --type=json \
+    -p '[{"op":"add","path":"/spec/template/containers/0/args/-","value":"--dtype=float32"}]' >/dev/null
+  sleep 15
+  # the nodes may not fit a second Qwen pod (4 CPU, 12 Gi requested) during the rolling update:
+  # remove the old ReplicaSets, keep the newest
+  old=$(oc get rs -n "$ns" -l "app.kubernetes.io/name=${isvc}" --sort-by=.metadata.creationTimestamp -o name | sed '$d')
+  [[ -n "$old" ]] && oc delete -n "$ns" $old >/dev/null
+  oc rollout status "deploy/${isvc}-kserve" -n "$ns" --timeout=600s >/dev/null && ok "${isvc} runs in float32"
+}
+
+prepare() {  # prepare [cloud|smart]
+  need jq
+  local m=${1:-} q1="Which team spent the most on LLMs in the last 7 days, and is it within its budget?"
+  step "Model for the agent and the judge"
+  if [[ -z "$m" ]]; then
+    if [[ "$(ask "What is the request throttle on our LLM API?" cloud 1 check | jq -r .status)" == ok ]]; then m=cloud
+    else m=smart; warn "model cloud fails (OpenAI key expired? ./deploy.sh ai-gateways openai-key): using the local model smart"; fi
+  fi
+  [[ "$m" == cloud || "$m" == smart ]] || die "usage: prepare [cloud|smart]"
+  if [[ "$m" == smart ]]; then
+    qwen_float32
+    oc set env deploy/finops-agent -n "$NS" -c agent JUDGE_MODEL=openai:/smart EVAL_AGENT_MODEL=smart >/dev/null
+  else
+    oc set env deploy/finops-agent -n "$NS" -c agent JUDGE_MODEL- EVAL_AGENT_MODEL- >/dev/null
+  fi
+  oc rollout status deploy/finops-agent -n "$NS" --timeout=300s >/dev/null
+  ok "agent model ${m}, judge openai:/$([[ $m == smart ]] && echo smart || echo cloud)"
+
+  step "Part A: production = v1, the first preset question"
+  prompts promote 1 | sed 's/^/    /'
+  ask_cmd "$q1" "$m" production
+  step "Part D2: promote v2, the same question"
+  prompts promote 2 | sed 's/^/    /'
+  sleep 16   # PROMPT_CACHE_TTL in agent.py
+  ask_cmd "$q1" "$m" production
+  step "Part D3: pinned versions 1 and 2"
+  ask_cmd "Why did the support team's LLM cost go up?" "$m" 1
+  ask_cmd "Why did the support team's LLM cost go up?" "$m" 2
+  load 6 "$m" production
+  load 3 "$m" 1           # v1 traces in the mix, for the judge (no Sources line)
+
+  step "Part E1: offline evaluation, prompt v1 vs v2 ($([[ $m == smart ]] && echo 'one request at a time: vLLM on CPU' || echo '3 workers'))"
+  # vLLM CPU also fails on structured output batched with other requests (pin_memory needs an
+  # accelerator): with the local judge, one request at a time
+  EVAL_WORKERS=$([[ $m == smart ]] && echo 1 || echo 3) evaluate 1 2 2>&1 \
+    | grep -E '^(prompt v|  [a-z_]+/mean)|agent error' | sed 's/^/    /' || true
+  step "Part E3: judge the newest live traces"
+  judge 12 2>&1 | grep -E '^(judging|  [a-z_]+/mean|assessments)' | sed 's/^/    /' || true
+  urls
+}
+
 # ----------------------------------------------------------------------------- status / urls / destroy
 status() {
   oc get deploy,route -n "$NS" 2>/dev/null || warn "not deployed: ./deploy.sh agentops deploy"
@@ -220,7 +295,7 @@ destroy() {
   info "MLflow keeps the workspace's experiments and prompts in its database (the workspace disappears with the namespace)"
 }
 
-usage() { sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 cmd=${1:-}; [[ $# -gt 0 ]] && shift
 case "$cmd" in
@@ -233,6 +308,7 @@ case "$cmd" in
   judge)    judge "$@" ;;
   metrics)  metrics ;;
   test)     test_all ;;
+  prepare)  prepare "$@" ;;
   status)   status ;;
   urls)     urls ;;
   destroy)  destroy ;;

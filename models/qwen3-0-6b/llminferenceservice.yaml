@@ -48,6 +48,10 @@ spec:
           # tool calling, so the Gen AI playground can use MCP servers with Qwen
           - --enable-auto-tool-choice
           - --tool-call-parser=hermes
+          # float32 instead of bfloat16: structured output (response_format JSON schema, used by the
+          # MLflow judges of demo 16) runs xgrammar's CPU kernel, which only accepts float32 logits
+          # ("logits must be of type float32" kills the engine). 0.6B in float32 is ~2.4 GB.
+          - --dtype=float32
         env:
           - name: HF_HOME
             value: /tmp/hf_home

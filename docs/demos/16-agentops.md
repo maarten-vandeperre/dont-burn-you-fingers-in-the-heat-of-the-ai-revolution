@@ -72,6 +72,19 @@ tool authorization and limits).
    * IntelliJ on `stack/agentops/`
 4. Start from a known state: `./deploy.sh agentops prompts promote 1` (production = v1).
 
+**Or go straight to the end state** (to talk through the results instead of building them live,
+about 30 minutes, unattended):
+```bash
+./deploy.sh agentops prepare            # cloud if it works, else the local model smart (also as judge)
+./deploy.sh agentops prepare smart      # force the local model, e.g. when the OpenAI key expired
+```
+It asks the Part A question on v1, promotes v2 and asks again (D2), asks with v1 and v2 pinned
+(D3), sends live traffic on v2 and v1, runs the offline evaluation v1 vs v2 (E1) and judges the 12
+newest live traces (E3). It ends with production = v2. With `smart` it also sets
+`JUDGE_MODEL=openai:/smart` and `EVAL_AGENT_MODEL=smart` on the agent, makes sure Qwen runs in
+float32 (see "If something goes wrong") and evaluates one request at a time; `prepare cloud`
+removes those two variables again.
+
 ---
 
 ## Part A: the agent (4 minutes)
@@ -472,6 +485,7 @@ tool authorization and limits).
 ./deploy.sh agentops eval 1 2       # v1: correctness 0.80, cites_sources 0.00 · v2: 1.00, 1.00, more tokens
 ./deploy.sh agentops judge 12       # assessments on the newest live traces
 ./deploy.sh agentops metrics        # agent metrics + Limitador counters for llm-key-agent / llm-key-judge
+./deploy.sh agentops prepare        # all of the above in one go: the demo's end state in MLflow
 ```
 
 ## Reset
@@ -487,6 +501,17 @@ namespace finds them again (`prompts register` leaves an existing prompt alone).
 ---
 
 ## If something goes wrong
+
+* **`HTTP 401` with `expired_secret_key` on model `cloud`:** the OpenAI key of demo 15 expired:
+  `./deploy.sh ai-gateways openai-key`, or run the demo on the local model
+  (`./deploy.sh agentops prepare smart`).
+* **Local judge (`openai:/smart`): `EngineCore encountered an issue`, then `502 Upstream connection
+  refused`:** vLLM on CPU applies the judges' structured output (JSON schema) with xgrammar.
+  In bfloat16 that kills the engine (`logits must be of type float32`): Qwen needs
+  `--dtype=float32` ([`llminferenceservice.yaml`](../../models/qwen3-0-6b/llminferenceservice.yaml)).
+  Also in float32 it fails when a judge request is batched with others (`pin_memory=True requires
+  a CUDA or other accelerator backend`): evaluate one request at a time
+  (`EVAL_WORKERS=1 ./deploy.sh agentops eval 1 2`; `prepare smart` does both).
 
 * **`deploy`: PostgreSQL `CrashLoopBackOff`, `role "finops" does not exist`:** the seed must run
   from `postgresql-start/` (every start, after the image created the user and database), not
